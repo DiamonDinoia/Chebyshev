@@ -41,7 +41,7 @@ public:
     coeffs_.resize(coeffs_shape_array);
 
     // 1) Record each dimension’s size (degree + 1)
-    for (long d = 0; d < N; ++d) { // Changed d to long
+    for (long d = 0; d < N; ++d) {
       shape_[d] = coeffs_.shape()[d];
     }
 
@@ -53,8 +53,10 @@ public:
 
     // 3) Perform the N-dimensional Discrete Cosine Transform (Type II)
     // This is done iteratively along each dimension for each output component.
-    for (long o = 0; o < M; ++o) { // Changed o to long, Loop over output components
-      for (long axis = 0; axis < N; ++axis) { // Changed axis to long, Perform DCT along each dimension
+    for (long o = 0; o < M; ++o) {
+      // Loop over output components
+      for (long axis = 0; axis < N; ++axis) {
+        // Perform DCT along each dimension
         long m = coeffs_.shape()[axis]; // Number of nodes/coefficients along the current axis
 
         // Iterate through all 1D slices along 'axis' for the current output component 'o'.
@@ -63,7 +65,7 @@ public:
         std::fill(loop_indices.begin(), loop_indices.end(), 0);
 
         long total_elements_in_slice = 1;
-        for (long d = 0; d < N; ++d) { // Changed d to long
+        for (long d = 0; d < N; ++d) {
           if (d != axis)
             total_elements_in_slice *= coeffs_.shape()[d];
         }
@@ -71,13 +73,13 @@ public:
         for (long i = 0; i < total_elements_in_slice; ++i) {
           // Construct the base index for the current 1D slice along 'axis'.
           std::array<long, N + 1> line_start_idx{};
-          for (long d = 0; d < N; ++d) // Changed d to long
+          for (long d = 0; d < N; ++d)
             line_start_idx[d] = loop_indices[d];
-          line_start_idx[N] = o; // Removed static_cast
+          line_start_idx[N] = o;
 
           // Extract the 1D slice data.
           std::vector<T> line_data(m);
-          for (long j = 0; j < m; ++j) { // Changed j to long
+          for (long j = 0; j < m; ++j) {
             std::array<long, N + 1> element_idx = line_start_idx;
             element_idx[axis] = j;
             line_data[j] = std::apply([&](auto &&... args) {
@@ -89,9 +91,9 @@ public:
           // C_k = (2/m) * sum_{j=0}^{m-1} x_j * cos(pi * k * (j + 0.5) / m)
           // The k=0 term has a factor of 0.5.
           std::vector<T> dct_data(m, T(0));
-          for (long k = 0; k < m; ++k) { // Changed k to long
+          for (long k = 0; k < m; ++k) {
             T sum{};
-            for (long j = 0; j < m; ++j) { // Changed j to long
+            for (long j = 0; j < m; ++j) {
               sum += line_data[j] * std::cos(pi * k * (j + T(0.5)) / m);
             }
             dct_data[k] = sum * (T(2) / m);
@@ -99,7 +101,7 @@ public:
           dct_data[0] *= T(0.5); // Adjustment for the k=0 term
 
           // Write back the DCT coefficients from dct_data to the coeffs_ array.
-          for (long k = 0; k < m; ++k) { // Changed k to long
+          for (long k = 0; k < m; ++k) {
             std::array<long, N + 1> element_idx = line_start_idx;
             element_idx[axis] = k;
             std::apply([&](auto &&... args) {
@@ -137,9 +139,9 @@ public:
     // Map x from the interval [a, b] in each dimension to [-1, 1].
     // xt_d = (2 * x_d - (a_d + b_d)) / (b_d - a_d)
     vecN_t xt(N);
-    for (long i = 0; i < N; ++i) { // Changed i to long
-      xt(i) = (T(2) * x(i) - a_(i) - b_(i)) // Removed static_cast
-                                 / (b_(i) - a_(i)); // Removed static_cast
+    for (long i = 0; i < N; ++i) {
+      xt(i) = (T(2) * x(i) - a_(i) - b_(i))
+              / (b_(i) - a_(i));
     }
 
     // Evaluate Chebyshev polynomials T_k(xt) for each dimension and each degree up to the maximum degree.
@@ -147,12 +149,12 @@ public:
     nda::array<T, 2> Tvals({N, *std::max_element(shape_.begin(), shape_.end())});
     Tvals = T(1); // T_0(x) = 1
 
-    for (long d = 0; d < N; ++d) { // Changed d to long
+    for (long d = 0; d < N; ++d) {
       if (shape_[d] > 1)
-        Tvals(d, 1) = xt(d); // Removed static_cast
-      for (long k = 2; k < shape_[d]; ++k) // Changed k to long
-        Tvals(d, k) = T(2) * xt(d) * Tvals(d, k - 1) - Tvals( // Removed static_cast
-                                             d, k - 2); // Removed static_cast
+        Tvals(d, 1) = xt(d);
+      for (long k = 2; k < shape_[d]; ++k)
+        Tvals(d, k) = T(2) * xt(d) * Tvals(d, k - 1) - Tvals(
+                          d, k - 2);
     }
 
     vecM_t result(M); // Result vector for the M outputs
@@ -164,31 +166,31 @@ public:
     std::fill(coeff_idx.begin(), coeff_idx.end(), 0);
 
     long total_coeffs = 1;
-    for (long s : shape_) { // Changed s to long
+    for (long s : shape_) {
       total_coeffs *= s;
     }
 
     std::array<long, N + 1> full_coeff_idx; // Full index including the output dimension
 
-    for (long i = 0; i < total_coeffs; ++i) { // Changed i to long
+    for (long i = 0; i < total_coeffs; ++i) {
       // Calculate the product of Chebyshev polynomial values for the current indices (k_0, ..., k_{N-1}).
       // prod_{d=0}^{N-1} T_{k_d}(x_d)
       T current_prod = T(1);
-      for (long d = 0; d < N; ++d) { // Changed d to long
-        current_prod *= Tvals(d, coeff_idx[d]); // Removed static_cast
+      for (long d = 0; d < N; ++d) {
+        current_prod *= Tvals(d, coeff_idx[d]);
       }
 
       // Add the term C[k_0, ..., k_{N-1}, o] * prod_{d=0}^{N-1} T_{k_d}(x_d) to the result for each output component 'o'.
-      for (long o = 0; o < M; ++o) { // Changed o to long
-        for (long d = 0; d < N; ++d) // Changed d to long
+      for (long o = 0; o < M; ++o) {
+        for (long d = 0; d < N; ++d)
           full_coeff_idx[d] = coeff_idx[d];
-        full_coeff_idx[N] = o; // Removed static_cast
+        full_coeff_idx[N] = o;
 
         auto coeff_value = std::apply([&](auto &&... args) {
           return coeffs_(std::forward<decltype(args)>(args)...);
         }, full_coeff_idx);
 
-        result(o) += coeff_value * current_prod; // Removed static_cast
+        result(o) += coeff_value * current_prod;
       }
 
       // Increment the indices (k_0, ..., k_{N-1}) to move to the next term in the sum.
@@ -203,7 +205,7 @@ public:
           if (current_dim == 0) {
             break;
           }
-            --current_dim; // Move to the previous dimension
+          --current_dim; // Move to the previous dimension
         }
       }
     }
@@ -216,30 +218,30 @@ private:
   // The nodes are determined by the indices (j_0, ..., j_{N-1}) where j_d ranges from 0 to Degree_d.
   template <size_t D_idx>
   void sample(F &f, std::array<long, N> &idx) {
-    for (long i = 0; i < shape_[D_idx]; ++i) { // Changed i to long
+    for (long i = 0; i < shape_[D_idx]; ++i) {
       idx[D_idx] = i;
       if constexpr (D_idx + 1 < N) {
         sample<D_idx + 1>(f, idx);
       } else {
         // At the innermost dimension, construct the N-dimensional point corresponding to the current indices.
         vecN_t pt(N);
-        for (long d = 0; d < N; ++d) { // Changed d to long
+        for (long d = 0; d < N; ++d) {
           // Calculate the Chebyshev node in [-1, 1] for dimension d.
           T theta = pi * (idx[d] + T(0.5)) / shape_[d];
           // Map the node from [-1, 1] to the interval [a_d, b_d].
-          pt(d) = T(0.5) * (a_(d) + b_(d)) + T(0.5) * ( // Removed static_cast
-                                       b_(d) - a_(d)) * std::cos(theta); // Removed static_cast
+          pt(d) = T(0.5) * (a_(d) + b_(d)) + T(0.5) * (
+                    b_(d) - a_(d)) * std::cos(theta);
         }
         auto out = f(pt); // Sample the function at the point.
         // Store the sampled values in the coefficients tensor at the corresponding index (j_0, ..., j_{N-1}, o).
-        for (long o = 0; o < M; ++o) { // Changed o to long
+        for (long o = 0; o < M; ++o) {
           std::array<long, N + 1> full;
-          for (long d = 0; d < N; ++d) // Changed d to long
+          for (long d = 0; d < N; ++d)
             full[d] = idx[d];
-          full[N] = o; // Removed static_cast
+          full[N] = o;
 
           std::apply([&](auto &&... args) {
-            coeffs_(std::forward<decltype(args)>(args)...) = out(o); // Removed static_cast
+            coeffs_(std::forward<decltype(args)>(args)...) = out(o);
           }, full);
         }
       }
@@ -264,20 +266,20 @@ void test_interp(const nda::array<double, 1> &a,
 
     for (int i = 0; i < 10000; ++i) {
       // Sample a random point in the interval [a, b] for each dimension.
-      for (long d = 0; d < D; ++d) { // Changed d to long
+      for (long d = 0; d < D; ++d) {
         double t = dist(rng);
-        pt(d) = a(d) + t * (b(d) - a(d)); // Removed static_cast
+        pt(d) = a(d) + t * (b(d) - a(d));
       }
       auto approx = cheb(pt); // Get the interpolated value from the Chebyshev series.
       double s = nda::sum(pt); // Sum of the components of the point.
       nda::array<double, 1> exact(M); // Exact value of the test function.
       // Test function: f(x_1, ..., x_D)_k = (k+1) * exp(sum(x_i))
-      for (long k = 0; k < M; ++k) // Changed k to long
+      for (long k = 0; k < M; ++k)
         exact(k) = (k + 1.0) * std::exp(s);
 
       // Compare approximate and exact values and update max relative error.
-      for (long k = 0; k < M; ++k) { // Changed k to long
-        double e = exact(k), p = approx(k); // Removed static_cast
+      for (long k = 0; k < M; ++k) {
+        double e = exact(k), p = approx(k);
         double rel = std::abs(e) > 1e-12 ? std::abs(1 - p / e) : std::abs(p);
         max_rel[k] = std::max(max_rel[k], rel);
       }
@@ -311,16 +313,16 @@ void test_interp(const nda::array<double, 1> &a,
 template <size_t D, size_t M>
 void test_dim_out() {
   nda::array<double, 1> a(D), b(D); // Interval [a, b]
-  for (long i = 0; i < D; ++i) { // Changed i to long
-    a(i) = -1.0; // Removed static_cast
-    b(i) = 1.0; // Removed static_cast
+  for (long i = 0; i < D; ++i) {
+    a(i) = -1.0;
+    b(i) = 1.0;
   }
   // Define the test function f(x_1, ..., x_D) = ((1)*exp(sum(x_i)), (2)*exp(sum(x_i)), ...)
   auto f = [](const nda::array<double, 1> &xs) {
     double s = nda::sum(xs);
     nda::array<double, 1> out(M);
-    for (long k = 0; k < M; ++k) // Changed k to long
-      out(k) = (k + 1.0) * std::exp(s); // Removed static_cast
+    for (long k = 0; k < M; ++k)
+      out(k) = (double(k) + 1.0) * std::exp(s);
     return out;
   };
   test_interp<D, M>(a, b, f); // Run the interpolation test
