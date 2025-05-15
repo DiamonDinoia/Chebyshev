@@ -5,195 +5,274 @@
 #include <array>
 #include <numeric>
 #include <algorithm>
+#include <tuple>    // For std::tuple and std::tuple_cat
+#include <utility>  // For std::index_sequence and std::apply
 
-#include <xtensor/containers/xarray.hpp>
-#include <xtensor/optional/xoptional_assembly.hpp>
-#include <xtensor/io/xio.hpp>
-#include <xtensor/core/xmath.hpp>
-#include <xtensor/containers/xadapt.hpp>
-#include <xtensor/generators/xbuilder.hpp> // Includes xt::zeros
-#include <xtensor-blas/xlinalg.hpp>
+// Include necessary nda headers
+#include <nda/nda.hpp>
+#include <nda/layout/idx_map.hpp> // Included based on user's selection
 
 constexpr double pi = 3.14159265358979323846;
 
 //==============================================================================
-// ChebFunND: N dims → M outputs, all in xtensor_fixed
+// ChebFunND: N dims → M outputs, all in nda::array
 //==============================================================================
 template <typename T, size_t N, size_t M, typename F, int... Degrees>
 class ChebFunND {
   static_assert(sizeof...(Degrees) == N, "Degree pack must match dimensionality");
 
-  template <int... Ds>
-  static constexpr auto make_coeffs_shape() {
-    return xt::xshape<(Ds + 1)..., M>();
-  }
-
-  using coeffs_t = xt::xtensor_fixed<T, decltype(make_coeffs_shape<Degrees...>())>;
-  using vecN_t = xt::xtensor_fixed<T, xt::xshape<N>>;
-  using vecM_t = xt::xtensor_fixed<T, xt::xshape<M>>;
+  using coeffs_t = nda::array<T, N + 1>; // nda::array for coefficients
+  using vecN_t = nda::array<T, 1>; // nda::array for N-dim points
+  using vecM_t = nda::array<T, 1>; // nda::array for M-dim outputs
 
   coeffs_t coeffs_;
   vecN_t a_, b_;
-  std::array<size_t, N> shape_;
+  std::array<long, N> shape_; // Use long for shape elements as per nda
+
+  // Helper to apply function call with a tuple of arguments
+  template <typename Array, typename... Args>
+  static auto apply_call(Array &arr, std::tuple<Args...> &&t) {
+    return std::apply([&](auto &&... args) {
+      return arr(std::forward<decltype(args)>(args)...);
+    }, std::forward<std::tuple<Args...>>(t));
+  }
 
 public:
+  // Constructor
   ChebFunND(const vecN_t &a, const vecN_t &b, F f)
     : a_(a), b_(b) {
+
+    // Determine the shape of the coefficients tensor from Degrees and M
+    std::array<long, N + 1> coeffs_shape_array = {static_cast<long>(Degrees + 1)..., static_cast<long>(M)};
+    coeffs_.resize(coeffs_shape_array); // Resize the coefficients array using the array
+
     // 1) Record each dimension’s size (degree + 1)
     for (size_t d = 0; d < N; ++d) {
       shape_[d] = coeffs_.shape()[d];
     }
 
     // 2) Sample f at Chebyshev nodes into coeffs_
-    std::array<size_t, N> idx{};
+    std::array<long, N> idx{}; // Use long for indices as per nda
     sample<0>(f, idx);
 
-    // 3) For each output component: DCT along each dimension
+    // 3) Perform DCT for each output component along each dimension using nested loops and direct indexing
+    std::array<long, N + 1> current_coeffs_idx{}; // Index for the coeffs_ array
+
     for (size_t o = 0; o < M; ++o) {
-      xt::xdynamic_slice_vector slice_selector(N + 1);
-      for (size_t d = 0; d < N; ++d) {
-        slice_selector[d] = xt::all();
-      }
-      slice_selector[N] = static_cast<long>(o);
-      // Get a dynamic view of the current output component
-      auto coeffs_slice = xt::dynamic_view(coeffs_, slice_selector);
+      // Loop over output components
+      // Initialize indices for the current output component
+      for (size_t d = 0; d < N; ++d)
+        current_coeffs_idx[d] = 0;
+      current_coeffs_idx[N] = static_cast<long>(o);
 
       // Perform DCT along each dimension
       for (size_t axis = 0; axis < N; ++axis) {
-        size_t m = coeffs_slice.shape()[axis]; // Number of coefficients along this axis
+        long m = coeffs_.shape()[axis]; // Number of coefficients along this axis for this dimension
 
-        // Iterate over all combinations of indices for dimensions other than 'axis'
-        std::vector<size_t> other_dims_shape;
+        // Iterate through all elements, performing DCT along the current axis
+        std::array<long, N> loop_indices{}; // Indices for the current N dimensions
+        std::fill(loop_indices.begin(), loop_indices.end(), 0);
+
+        long total_elements_in_slice = 1;
         for (size_t d = 0; d < N; ++d) {
-          if (d != axis) {
-            other_dims_shape.push_back(coeffs_slice.shape()[d]);
-          }
+          if (d != axis)
+            total_elements_in_slice *= coeffs_.shape()[d];
         }
 
-        size_t num_other_dims = other_dims_shape.size();
-        size_t total_slices = 1;
-        for (size_t s : other_dims_shape) {
-          total_slices *= s;
-        }
+        for (long i = 0; i < total_elements_in_slice; ++i) {
+          // Construct the indices for the current 1D slice along 'axis'
+          std::array<long, N + 1> line_start_idx{};
+          for (size_t d = 0; d < N; ++d)
+            line_start_idx[d] = loop_indices[d];
+          line_start_idx[N] = static_cast<long>(o); // Fix the output dimension index
 
-        std::vector<size_t> current_indices(num_other_dims, 0);
+          // Create a temporary vector to hold the 1D slice data
+          std::vector<T> line_data(m);
 
-        for (size_t i = 0; i < total_slices; ++i) {
-          // Calculate current_indices based on linear index i and other_dims_shape
-          size_t temp_i = i;
-          for (int d = num_other_dims - 1; d >= 0; --d) {
-            current_indices[d] = temp_i % other_dims_shape[d];
-            temp_i /= other_dims_shape[d];
+          // Extract the 1D slice data
+          for (long j = 0; j < m; ++j) {
+            std::array<long, N + 1> element_idx = line_start_idx;
+            element_idx[axis] = j;
+            line_data[j] = std::apply([&](auto &&... args) {
+              return coeffs_(std::forward<decltype(args)>(args)...);
+            }, element_idx);
           }
 
-          // Build the slice selector for the 1D line along the current axis
-          xt::xdynamic_slice_vector line_selector(N);
-          size_t current_other_dim_idx = 0;
-          for (size_t d = 0; d < N; ++d) {
-            if (d == axis) {
-              line_selector[d] = xt::all(); // Select the entire dimension for the current axis
-            } else {
-              // Select the fixed index for dimensions other than the current axis
-              line_selector[d] = static_cast<long>(current_indices[current_other_dim_idx++]);
-            }
-          }
+          // Perform 1D DCT (Type 2) on the line_data manually
+          std::vector<T> dct_data(m, T(0));
 
-          // Get the 1D dynamic view (the "line") along the current axis
-          auto line = xt::dynamic_view(coeffs_slice, line_selector);
-
-          // Perform DCT on the line (in-place)
-          xt::xtensor<T, 1> dct = xt::zeros<T>({m});
-          for (size_t k = 0; k < m; ++k) {
+          for (long k = 0; k < m; ++k) {
             T sum{};
-            for (size_t j = 0; j < m; ++j) {
-              sum += line(j) * std::cos(pi * k * (j + T(0.5)) / m);
+            for (long j = 0; j < m; ++j) {
+              sum += line_data[j] * std::cos(pi * k * (j + T(0.5)) / m);
             }
-            dct(k) = sum * (T(2) / m);
+            dct_data[k] = sum * (T(2) / m);
           }
-          dct(0) *= T(0.5);
+          dct_data[0] *= T(0.5);
 
-          // Write back the DCT coefficients to the original slice
-          for (size_t j = 0; j < m; ++j) {
-            line(j) = dct(j);
+          // Write back the DCT coefficients from dct_data to the coeffs_ array
+          for (long k = 0; k < m; ++k) {
+            std::array<long, N + 1> element_idx = line_start_idx;
+            element_idx[axis] = k;
+            std::apply([&](auto &&... args) {
+              coeffs_(std::forward<decltype(args)>(args)...) = dct_data[k];
+            }, element_idx);
+          }
+
+          // Increment loop_indices, skipping the current axis
+          long current_dim = N - 1;
+          while (current_dim >= 0) {
+            if (current_dim == axis) {
+              --current_dim;
+              continue;
+            }
+            ++loop_indices[current_dim];
+            if (loop_indices[current_dim] < coeffs_.shape()[current_dim]) {
+              break;
+            } else {
+              loop_indices[current_dim] = 0;
+              if (current_dim == 0) {
+                break;
+              }
+              --current_dim;
+            }
           }
         }
       }
     }
   }
 
+  // Evaluate the interpolated function
   vecM_t operator()(const vecN_t &x) const {
     // Map x from [a, b] to [-1, 1]
-    vecN_t xt = (T(2) * x - a_ - b_) / (b_ - a_);
+    vecN_t xt(N); // Resize xt
+    for (size_t i = 0; i < N; ++i) {
+      xt(static_cast<long>(i)) = (T(2) * x(static_cast<long>(i)) - a_(static_cast<long>(i)) - b_(static_cast<long>(i)))
+                                 / (b_(static_cast<long>(i)) - a_(static_cast<long>(i)));
+    }
 
     // Evaluate Chebyshev polynomials T_k(xt) for each dimension
-    std::vector<xt::xtensor<T, 1>> Tvals(N); // Use vector of 1D xtensors
-    for (size_t d = 0; d < N; ++d) {
-      size_t m = shape_[d]; // Degree + 1
-      Tvals[d] = xt::zeros<T>({m}); // Corrected: Use xt::zeros free function
-      if (m > 0)
-        Tvals[d](0) = T(1);
-      if (m > 1)
-        Tvals[d](1) = xt(d);
-      for (size_t k = 2; k < m; ++k) {
-        Tvals[d](k) = T(2) * xt(d) * Tvals[d](k - 1) - Tvals[d](k - 2);
+    // Use a 2D nda::array to store Tvals, shape (N, max_degree + 1)
+    long max_degree_plus_1 = 0;
+    for (size_t s : shape_) {
+      max_degree_plus_1 = std::max(max_degree_plus_1, static_cast<long>(s)); // Cast s to long for std::max
+    }
+    nda::array<T, 2> Tvals({static_cast<long>(N), max_degree_plus_1});
+    // Tvals.fill(T(1)); // Replace fill with loop
+    for (long i = 0; i < Tvals.shape()[0]; ++i) {
+      for (long j = 0; j < Tvals.shape()[1]; ++j) {
+        Tvals(i, j) = T(1);
       }
     }
 
-    // Evaluate the interpolated function using the coefficients and Tvals
-    vecM_t result = xt::zeros<T>({M});
-    std::array<size_t, N> idx{}; // Indices for the coefficients
-    eval<0>(idx, T(1), Tvals, result);
+    for (size_t d = 0; d < N; ++d) {
+      if (shape_[d] > 1)
+        Tvals(static_cast<long>(d), 1) = xt(static_cast<long>(d));
+      for (long k = 2; k < shape_[d]; ++k)
+        Tvals(static_cast<long>(d), k) = T(2) * xt(static_cast<long>(d)) * Tvals(static_cast<long>(d), k - 1) - Tvals(
+                                             static_cast<long>(d), k - 2);
+    }
+
+    vecM_t result(M); // Resize result
+    // result.fill(T(0)); // Replace fill with loop
+    for (long i = 0; i < result.shape()[0]; ++i)
+      result(i) = T(0);
+
+    // Evaluate the interpolated function iteratively
+    std::array<long, N> coeff_idx{}; // Indices for the coefficients tensor
+    std::fill(coeff_idx.begin(), coeff_idx.end(), 0); // Initialize indices to 0
+
+    long total_coeffs = 1;
+    for (size_t s : shape_) {
+      total_coeffs *= s;
+    }
+
+    // Declare nda_full_coeff_idx outside the inner loop
+    // Use std::array<long, N+1> instead of typename coeffs_t::index_t
+    std::array<long, N + 1> nda_full_coeff_idx_array;
+    std::array<long, N + 1> full_coeff_idx; // Moved declaration outside the loop
+
+    for (long i = 0; i < total_coeffs; ++i) {
+      // Calculate the product of Chebyshev polynomial values for the current indices
+      T current_prod = T(1);
+      for (size_t d = 0; d < N; ++d) {
+        current_prod *= Tvals(static_cast<long>(d), coeff_idx[d]);
+      }
+
+      // Add the term to the result for each output component
+      for (size_t o = 0; o < M; ++o) {
+        // std::array<long, N + 1> full_coeff_idx; // Declaration moved outside
+        for (size_t d = 0; d < N; ++d)
+          full_coeff_idx[d] = coeff_idx[d];
+        full_coeff_idx[N] = static_cast<long>(o);
+
+        // Copy indices to nda_full_coeff_idx_array
+        for (size_t j = 0; j < N + 1; ++j)
+          nda_full_coeff_idx_array[j] = full_coeff_idx[j];
+
+        // Use std::apply to unpack the index array for the call operator
+        auto coeff_value = std::apply([&](auto &&... args) {
+          return coeffs_(std::forward<decltype(args)>(args)...);
+        }, nda_full_coeff_idx_array);
+
+        result(static_cast<long>(o)) += coeff_value * current_prod;
+      }
+
+      // Increment the indices (simulating nested loops)
+      long current_dim = N - 1;
+      while (current_dim >= 0) {
+        // Loop until incrementing the first dimension
+        coeff_idx[current_dim]++;
+        if (coeff_idx[current_dim] < shape_[current_dim]) {
+          break; // Move to the next set of indices
+        } else {
+          coeff_idx[current_dim] = 0; // Reset current dimension index
+          if (current_dim == 0) {
+            break; // All indices have been iterated through
+          }
+          current_dim--; // Move to the previous dimension
+        }
+      }
+    }
+
     return result;
   }
 
 private:
   // Recursive helper to sample the function at Chebyshev nodes
   template <size_t D_idx>
-  void sample(F &f, std::array<size_t, N> &idx) {
-    for (size_t i = 0; i < shape_[D_idx]; ++i) {
+  void sample(F &f, std::array<long, N> &idx) {
+    for (long i = 0; i < shape_[D_idx]; ++i) {
       idx[D_idx] = i;
       if constexpr (D_idx + 1 < N) {
         sample<D_idx + 1>(f, idx);
       } else {
         // We are at the innermost dimension, calculate the point and sample f
-        vecN_t pt;
+        vecN_t pt(N); // Resize pt
         for (size_t d = 0; d < N; ++d) {
           T theta = pi * (idx[d] + T(0.5)) / shape_[d]; // Chebyshev node angle
-          pt(d) = T(0.5) * (a_(d) + b_(d)) + T(0.5) * (b_(d) - a_(d)) * std::cos(theta); // Map from [-1, 1] to [a, b]
+          pt(static_cast<long>(d)) = T(0.5) * (a_(static_cast<long>(d)) + b_(static_cast<long>(d))) + T(0.5) * (
+                                       b_(static_cast<long>(d)) - a_(static_cast<long>(d))) * std::cos(theta);
+          // Map from [-1, 1] to [a, b]
         }
         auto out = f(pt); // Sample the function
         // Store the sampled values in the coefficients tensor
         for (size_t o = 0; o < M; ++o) {
-          std::array<size_t, N + 1> full;
+          std::array<long, N + 1> full;
           for (size_t d = 0; d < N; ++d)
             full[d] = idx[d];
-          full[N] = o; // Index for the output component
-          coeffs_[full] = out(o);
-        }
-      }
-    }
-  }
+          full[N] = static_cast<long>(o); // Index for the output component
+          // Accessing coeffs_ using an array of indices
+          // Use std::array<long, N+1> instead of typename coeffs_t::index_t
+          std::array<long, N + 1> nda_full_coeff_idx_array; // nda index type
+          for (size_t j = 0; j < N + 1; ++j)
+            nda_full_coeff_idx_array[j] = full[j];
 
-  // Recursive helper to evaluate the interpolated function
-  template <size_t D_idx>
-  void eval(std::array<size_t, N> &idx, T prod,
-            const std::vector<xt::xtensor<T, 1>> &Tvals, // Updated type
-            vecM_t &acc) const {
-    if constexpr (D_idx == N) {
-      // We have a full set of indices, add the term to the accumulator
-      for (size_t o = 0; o < M; ++o) {
-        std::array<size_t, N + 1> full;
-        for (size_t d = 0; d < N; ++d)
-          full[d] = idx[d];
-        full[N] = o;
-        acc(o) += coeffs_[full] * prod;
-      }
-    } else {
-      // Recurse through the dimensions
-      for (size_t k = 0; k < shape_[D_idx]; ++k) {
-        idx[D_idx] = k; // Set index for current dimension
-        // Multiply by the Chebyshev polynomial value for this dimension and index
-        eval<D_idx + 1>(idx, prod * Tvals[D_idx](k), Tvals, acc); // Updated access
+          // Use std::apply to unpack the index array for the call operator
+          std::apply([&](auto &&... args) {
+            coeffs_(std::forward<decltype(args)>(args)...) = out(static_cast<long>(o));
+          }, nda_full_coeff_idx_array);
+        }
       }
     }
   }
@@ -203,30 +282,35 @@ private:
 // Test harness
 //==============================================================================
 template <size_t D, size_t M, typename F>
-void test_interp(const xt::xtensor_fixed<double, xt::xshape<D>> &a,
-                 const xt::xtensor_fixed<double, xt::xshape<D>> &b,
+void test_interp(const nda::array<double, 1> &a,
+                 const nda::array<double, 1> &b,
                  F fcn) {
   auto run_test = [&](auto &cheb) {
     std::mt19937_64 rng(42);
     std::uniform_real_distribution<double> dist(0, 1);
-    xt::xtensor_fixed<double, xt::xshape<D>> pt;
+    nda::array<double, 1> pt(D); // Use nda::array for pt
+
     std::array<double, M> max_rel{};
-    max_rel.fill(0.0); // Initialize max_rel to zeros
+    // max_rel.fill(0.0); // std::array fill should be fine, but using loop for consistency
+    for (size_t i = 0; i < M; ++i)
+      max_rel[i] = 0.0;
 
     for (int i = 0; i < 10000; ++i) {
       for (size_t d = 0; d < D; ++d) {
         double t = dist(rng);
-        pt(d) = a(d) + t * (b(d) - a(d)); // Sample a random point in the interval [a, b]
+        pt(static_cast<long>(d)) = a(static_cast<long>(d)) + t * (b(static_cast<long>(d)) - a(static_cast<long>(d)));
+        // Sample a random point in the interval [a, b]
       }
       auto approx = cheb(pt); // Get the interpolated value
-      double s = xt::sum(pt)(); // Calculate the sum of components for the exact function
-      xt::xtensor_fixed<double, xt::xshape<M>> exact;
-      for (size_t k = 0; k < M; ++k)
+      double s = nda::sum(pt); // Use nda::sum
+      nda::array<double, 1> exact(M); // Use nda::array for exact
+      // exact.fill(0.0); // Replace fill with loop
+      for (long k = 0; k < M; ++k)
         exact(k) = (k + 1.0) * std::exp(s); // Calculate the exact value
 
       // Compare approximate and exact values and update max relative error
       for (size_t k = 0; k < M; ++k) {
-        double e = exact(k), p = approx(k);
+        double e = exact(static_cast<long>(k)), p = approx(static_cast<long>(k));
         double rel = std::abs(e) > 1e-12 ? std::abs(1 - p / e) : std::abs(p);
         // Calculate relative error, handle near-zero exact values
         max_rel[k] = std::max(max_rel[k], rel);
@@ -262,17 +346,18 @@ void test_interp(const xt::xtensor_fixed<double, xt::xshape<D>> &a,
 // Helper to run tests for different dimensions and output sizes
 template <size_t D, size_t M>
 void test_dim_out() {
-  xt::xtensor_fixed<double, xt::xshape<D>> a, b;
+  nda::array<double, 1> a(D), b(D); // Use nda::array for a and b
   for (size_t i = 0; i < D; ++i) {
-    a(i) = -1.0;
-    b(i) = 1.0;
+    a(static_cast<long>(i)) = -1.0;
+    b(static_cast<long>(i)) = 1.0;
   } // Define the interval [a, b]
   // Define the test function f(x_1, ..., x_D) = ((1)*exp(sum(x_i)), (2)*exp(sum(x_i)), ...)
-  auto f = [](auto &&xs) {
-    double s = xt::sum(xs)();
-    xt::xtensor_fixed<double, xt::xshape<M>> out;
+  auto f = [](const nda::array<double, 1> &xs) {
+    // Use nda::array for input
+    double s = nda::sum(xs); // Use nda::sum
+    nda::array<double, 1> out(M); // Use nda::array for output
     for (size_t k = 0; k < M; ++k)
-      out(k) = (k + 1.0) * std::exp(s);
+      out(static_cast<long>(k)) = (k + 1.0) * std::exp(s);
     return out;
   };
   test_interp<D, M>(a, b, f); // Run the interpolation test
