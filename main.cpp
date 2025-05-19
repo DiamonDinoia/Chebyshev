@@ -257,7 +257,7 @@ void test_interp(const nda::array<double, 1> &a,
                  const nda::array<double, 1> &b,
                  F fcn) {
   auto run_test = [&](auto &cheb) {
-    std::mt19937_64 rng(42);
+    std::mt19937_64 rng(std::random_device{}());
     std::uniform_real_distribution<double> dist(0, 1);
     nda::array<double, 1> pt(D); // Random point in the N-dimensional box
 
@@ -270,8 +270,8 @@ void test_interp(const nda::array<double, 1> &a,
         double t = dist(rng);
         pt(d) = a(d) + t * (b(d) - a(d));
       }
-      auto approx = cheb(pt);        // Interpolated value
-      auto exact  = fcn(pt);         // Exact function value
+      auto approx = cheb(pt); // Interpolated value
+      auto exact = fcn(pt); // Exact function value
 
       for (long k = 0; k < M; ++k) {
         double e = exact(k), p = approx(k);
@@ -309,15 +309,15 @@ template <size_t D, size_t M>
 void test_dim_out() {
   nda::array<double, 1> a(D), b(D); // Interval [a, b]
   for (long i = 0; i < D; ++i) {
-    a(i) = -2.0;
-    b(i) = 2.0;
+    a(i) = -1.0;
+    b(i) = 1.0;
   }
   // Define the test function f(x_1, ..., x_D) = ((1)*exp(sum(x_i)), (2)*exp(sum(x_i)), ...)
   auto f = [](const nda::array<double, 1> &xs) {
     double s = nda::sum(xs);
     nda::array<double, 1> out(M);
     for (long k = 0; k < M; ++k)
-      out(k) = (double(k) + 1.0) * std::exp(double(1.0)* s);
+      out(k) = (double(k) + 1.0) * std::exp(2.0 * s);
     return out;
   };
   test_interp<D, M>(a, b, f); // Run the interpolation test
