@@ -73,11 +73,11 @@ class BarCheb1D {
 public:
   BarCheb1D(Func F, const int degree, const double a = -1, const double b = 1)
     : N(degree + 1), a(a), b(b), x(N), w(N), fvals(N) {
-    for (int i = 0; i < N; i++) {
+    for (int i = N - 1; i >= 0; i--) {
       auto c = (2 * i + 1) * PI / (2 * N);
-      x[N - i - 1] = map_to_domain(std::cos(c));
-      w[N - i - 1] = (1 - 2 * (i % 2)) * std::sin(c);
-      fvals[i] = F(x[N - i - 1]);
+      x[i] = map_to_domain(std::cos(c));
+      w[i] = (1 - 2 * (i % 2)) * std::sin(c);
+      fvals[i] = F(x[i]);
     }
   }
 
@@ -124,7 +124,7 @@ template <typename T, typename V> void test(V &&f) {
   T interpolator(f, degree, a, b);
 
   std::cout << "Chebyshev interpolation test on random samples:\n";
-  std::cout << "Function: f(x) = cos(x), Domain: [" << a << ", " << b << "], Degree: " << degree << "\n\n";
+  std::cout << "Function: f(x) = exp(x)+1, Domain: [" << a << ", " << b << "], Degree: " << degree << "\n\n";
 
   // Set up RNG
   std::mt19937 rng(42); // Fixed seed for reproducibility
@@ -151,7 +151,7 @@ template <typename T, typename V> void test(V &&f) {
 // ----- Main Test with Random Evaluation -----
 int main() {
   auto f = [](double x) {
-    return std::cos(x);
+    return std::exp(x)+1;
   };
   test<Cheb1D<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n";
