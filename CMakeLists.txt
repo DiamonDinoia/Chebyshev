@@ -48,3 +48,6 @@ add_executable(chebyshev_nd main.cpp)
 target_link_libraries(chebyshev_nd PRIVATE nda::nda_c xtensor xtensor-blas xtl)
 target_include_directories(chebyshev_nd PRIVATE ${nda_SOURCE_DIR}/include)
 target_compile_features(chebyshev_nd PRIVATE cxx_std_17)
+
+add_executable(chebyshev_1d cheb1d.cpp)
+target_compile_features(chebyshev_1d PRIVATE cxx_std_17)
