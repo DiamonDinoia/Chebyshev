@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <vector>
 #include <cmath>
 #include <functional>
@@ -14,57 +15,64 @@ template <class Func>
 class Cheb1D {
 public:
   Cheb1D(Func F, const int degree, const double a = -1, const double b = 1)
-    : N(degree), a(a), b(b), coeffs(degree + 1) {
-    // Use Chebyshev extrema nodes: x_k = cos(pi * k / N), for k = 0..N
-    std::vector<double> fvals(N + 1);
-    for (int k = 0; k <= N; ++k) {
-      double xk = std::cos(PI * k / N);
+    : N(degree + 1), low(b - a), hi(b + a), coeffs(N) {
+
+    std::vector<double> fvals(N); // N = degree + 1 points
+
+    for (int k = 0; k < N; ++k) {
+      double xk = std::cos(PI * k / degree); // extrema nodes
       double x_mapped = map_to_domain(xk);
       fvals[k] = F(x_mapped);
     }
 
-    // Compute Chebyshev coefficients using exact DCT-I formula (manual)
-    for (int n = 0; n <= N; ++n) {
-      double sum = 0.0;
-      for (int k = 0; k <= N; ++k) {
-        double theta = PI * k * n / N;
-        double weight = 1.0;
-        if (k == 0 || k == N)
-          weight = 0.5; // edge weights
-        sum += weight * fvals[k] * std::cos(theta);
+    // Compute Chebyshev coefficients using DCT-I-style formula
+    for (int n = 0; n < N; ++n) {
+      double sum = .5 * fvals[0];
+      for (int k = 1; k < degree; ++k) {
+        double theta = PI * k * n / degree;
+        sum += fvals[k] * std::cos(theta);
       }
-      coeffs[n] = (2.0 / N) * sum;
+      sum += 0.5 * fvals[degree] * std::cos(PI * n);
+      coeffs[n] = 2.0 / degree * sum;
     }
-    coeffs[0] *= 0.5; // adjust a_0
-    coeffs[N] *= 0.5; // adjust a_N
+
+    coeffs[0] *= 0.5;
+    coeffs[degree] *= 0.5;
+    // reverse coeffs
+    std::reverse(coeffs.begin(), coeffs.end());
   }
 
   // Evaluate using Clenshaw's algorithm (numerically stable)
-  double operator()(double pt) const {
-    double x = map_from_domain(pt); // map pt from [a, b] to [-1, 1]
-    double b_kp1 = 0.0, b_kp2 = 0.0;
-    for (int j = N; j >= 1; --j) {
-      double b_k = 2.0 * x * b_kp1 - b_kp2 + coeffs[j];
-      b_kp2 = b_kp1;
-      b_kp1 = b_k;
+  double operator()(const double pt) const {
+    const double x = map_from_domain(pt);
+    const double x2 = 2 * x;
+
+    double c0 = coeffs[0];
+    double c1 = coeffs[1];
+
+    for (int i = 2; i < N; ++i) {
+      const double tmp = c1;
+      c1 = coeffs[i] - c0;
+      c0 = c0 * x2 + tmp;
     }
-    return x * b_kp1 - b_kp2 + coeffs[0];
+
+    return c1 + c0 * x;
   }
 
 private:
-  int N;
-  double a, b;
+  const int N;
+  double low, hi;
   std::vector<double> coeffs;
 
   // Map from [-1, 1] to [a, b]
   template <class T>
   constexpr auto map_to_domain(const T x) const {
-    return 0.5 * ((b - a) * x + (b + a));
+    return 0.5 * (low * x + hi);
   }
 
   // Map from [a, b] to [-1, 1]
   constexpr double map_from_domain(double x) const {
-    return (2.0 * x - (b + a)) / (b - a);
+    return (2.0 * x - hi) / low;
   }
 };
 
@@ -83,14 +91,10 @@ public:
 
   double operator()(double pt) const {
 
-    int n = x.size();
-    for (int i = 0; i < n; ++i) {
-      if (pt == x[i]) { return fvals[i]; }
-    }
-
     double num = 0, den = 0, dif = 0, q = 0;
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < N; ++i) {
       dif = pt - x[i];
+      if (dif == 0) { return fvals[i]; } // Avoid division by zero
       q = w[i] / dif;
       num = num + q * fvals[i];
       den = den + q;
@@ -100,8 +104,8 @@ public:
   }
 
 private:
-  int N;
-  double a, b;
+  const int N;
+  const double a, b;
   std::vector<double> x, w, fvals;
 
   // Map from [-1, 1] to [a, b]
@@ -119,7 +123,7 @@ private:
 template <typename T, typename V> void test(V &&f) {
 
   int degree = 15;
-  double a = -.5, b = .5;
+  double a = -1.5, b = 1.5;
 
   T interpolator(f, degree, a, b);
 
@@ -151,7 +155,7 @@ template <typename T, typename V> void test(V &&f) {
 // ----- Main Test with Random Evaluation -----
 int main() {
   auto f = [](double x) {
-    return std::exp(x)+1;
+    return std::exp(x) + 1;
   };
   test<Cheb1D<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n";
