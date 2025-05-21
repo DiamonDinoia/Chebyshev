@@ -81,23 +81,29 @@ class BarCheb1D {
 public:
   BarCheb1D(Func F, const int degree, const double a = -1, const double b = 1)
     : N(degree + 1), a(a), b(b), x(N), w(N), fvals(N) {
-    for (int i = N - 1; i >= 0; i--) {
-      auto c = (2 * i + 1) * PI / (2 * N);
-      x[i] = map_to_domain(std::cos(c));
-      w[i] = (1 - 2 * (i % 2)) * std::sin(c);
+    for (int i = 0; i < N; ++i) {
+      double theta = PI * i / (N - 1); // Lobatto points
+      x[i] = map_to_domain(std::cos(theta));
+
+      // Barycentric weights for Chebyshev–Lobatto nodes
+      w[i] = (i == 0 || i == N - 1) ? 0.5 : 1.0;
+      w[i] *= (i % 2 == 0) ? 1.0 : -1.0;
+
       fvals[i] = F(x[i]);
     }
   }
 
   double operator()(double pt) const {
-
-    double num = 0, den = 0, dif = 0, q = 0;
     for (int i = 0; i < N; ++i) {
-      dif = pt - x[i];
-      if (dif == 0) { return fvals[i]; } // Avoid division by zero
-      q = w[i] / dif;
-      num = num + q * fvals[i];
-      den = den + q;
+      if (pt == x[i]) { return fvals[i]; }
+    }
+
+    double num = 0, den = 0;
+    for (int i = 0; i < N; ++i) {
+      double diff = pt - x[i];
+      double q = w[i] / diff;
+      num += q * fvals[i];
+      den += q;
     }
 
     return num / den;
