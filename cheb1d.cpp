@@ -18,24 +18,22 @@ public:
     std::vector<double> fvals(N);
 
     for (int k = 0; k < N; ++k) {
-      double xk = std::cos(PI * k / (N - 1)); // Chebyshev–Lobatto nodes
+      double theta = (2 * k + 1) * PI / (2 * N);
+      double xk = std::cos(theta);
       double x_mapped = map_to_domain(xk);
       fvals[k] = F(x_mapped);
     }
 
-    // Compute Chebyshev coefficients using DCT-I-style formula
     for (int m = 0; m < N; ++m) {
-      double sum = 0.5 * fvals[0];
-      for (int k = 1; k < N - 1; ++k) {
-        double theta = PI * k * m / (N - 1);
-        sum += fvals[k] * std::cos(theta);
+      double sum = 0.0;
+      for (int k = 0; k < N; ++k) {
+        double theta = (2 * k + 1) * PI / (2 * N);
+        sum += fvals[k] * std::cos(m * theta);
       }
-      sum += 0.5 * fvals[N - 1] * std::cos(PI * m);
-      coeffs[m] = 2.0 / (N - 1) * sum;
+      coeffs[m] = (2.0 / N) * sum;
     }
 
     coeffs[0] *= 0.5;
-    coeffs[N - 1] *= 0.5;
     std::reverse(coeffs.begin(), coeffs.end());
   }
 
@@ -75,14 +73,10 @@ class BarCheb1D {
 public:
   BarCheb1D(Func F, const int n, const double a = -1, const double b = 1)
     : N(n), a(a), b(b), x(N), w(N), fvals(N) {
-    for (int i = 0; i < N; ++i) {
-      double theta = PI * i / (N - 1); // Lobatto points
+    for (int i = N - 1; i >= 0; i--) {
+      double theta = (2 * i + 1) * PI / (2 * N);
       x[i] = map_to_domain(std::cos(theta));
-
-      // Barycentric weights for Chebyshev–Lobatto nodes
-      w[i] = (i == 0 || i == N - 1) ? 0.5 : 1.0;
-      w[i] *= (i % 2 == 0) ? 1.0 : -1.0;
-
+      w[i] = (1 - 2 * (i % 2)) * std::sin(theta);
       fvals[i] = F(x[i]);
     }
   }

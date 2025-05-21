@@ -9,19 +9,18 @@
 
 constexpr double PI = 3.14159265358979323846;
 
-struct ChebData1D {
+struct ChebGrid1D {
   int N;
   double a, b;
-  std::vector<double> x; // Chebyshev–Lobatto nodes
+  std::vector<double> x; // Chebyshev second-kind nodes
   std::vector<double> w; // Barycentric weights
 
-  ChebData1D(int n, double a_ = -1, double b_ = 1)
+  ChebGrid1D(int n, double a_ = -1, double b_ = 1)
     : N(n), a(a_), b(b_), x(n), w(n) {
     for (int i = 0; i < N; ++i) {
-      double theta = PI * i / (N - 1);
+      double theta = (2 * i + 1) * PI / (2 * N);
       x[i] = map_to_domain(std::cos(theta));
-      w[i] = (i == 0 || i == N - 1) ? 0.5 : 1.0;
-      w[i] *= (i % 2 == 0) ? 1.0 : -1.0;
+      w[i] = (1 - 2 * (i % 2)) * std::sin(theta); // alternating sign
     }
   }
 
@@ -40,7 +39,7 @@ struct ChebData1D {
 template <class Func>
 class Cheb1D {
 public:
-  Cheb1D(Func F, const ChebData1D &data)
+  Cheb1D(Func F, const ChebGrid1D &data)
     : N(data.N), low(data.b - data.a), hi(data.b + data.a), coeffs(N) {
 
     std::vector<double> fvals(N);
@@ -48,18 +47,17 @@ public:
       fvals[i] = F(data.x[i]);
     }
 
+    // Projection using Chebyshev second-kind nodes (DCT-II style)
     for (int m = 0; m < N; ++m) {
-      double sum = 0.5 * fvals[0];
-      for (int k = 1; k < N - 1; ++k) {
-        double theta = PI * k * m / (N - 1);
-        sum += fvals[k] * std::cos(theta);
+      double sum = 0.0;
+      for (int k = 0; k < N; ++k) {
+        double theta = (2 * k + 1) * PI / (2 * N);
+        sum += fvals[k] * std::cos(m * theta);
       }
-      sum += 0.5 * fvals[N - 1] * std::cos(PI * m);
-      coeffs[m] = 2.0 / (N - 1) * sum;
+      coeffs[m] = (2.0 / N) * sum;
     }
 
-    coeffs[0] *= 0.5;
-    coeffs[N - 1] *= 0.5;
+    coeffs[0] *= 0.5; // normalization adjustment
     std::reverse(coeffs.begin(), coeffs.end());
   }
 
@@ -92,7 +90,7 @@ private:
 template <class Func>
 class BarCheb1D {
 public:
-  BarCheb1D(Func F, const ChebData1D &data)
+  BarCheb1D(Func F, const ChebGrid1D &data)
     : N(data.N), a(data.a), b(data.b), x(data.x), w(data.w), fvals(N) {
     for (int i = 0; i < N; ++i) {
       fvals[i] = F(x[i]);
@@ -127,11 +125,11 @@ void test(V &&f) {
   int n = 16;
   double a = -1.5, b = 1.5;
 
-  ChebData1D data(n, a, b);
+  ChebGrid1D data(n, a, b);
   T interpolator(f, data);
 
   std::cout << "Chebyshev interpolation test on random samples:\n";
-  std::cout << "Function: f(x) = exp(x)+1, Domain: [" << a << ", " << b << "], Nodes: " << n << "\n\n";
+  std::cout << "Function: f(x) = cos(x)+1, Domain: [" << a << ", " << b << "], Nodes: " << n << "\n\n";
 
   std::mt19937 rng(42);
   std::uniform_real_distribution<double> dist(a, b);
@@ -153,7 +151,7 @@ void test(V &&f) {
 }
 
 int main() {
-  auto f = [](double x) { return std::exp(x) + 1; };
+  auto f = [](double x) { return std::cos(x) + 1; };
   test<Cheb1D<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n\n\n";
   test<BarCheb1D<decltype(f)>>(f);
