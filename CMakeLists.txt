@@ -51,3 +51,6 @@ target_compile_features(chebyshev_nd PRIVATE cxx_std_17)
 
 add_executable(chebyshev_1d cheb1d.cpp)
 target_compile_features(chebyshev_1d PRIVATE cxx_std_17)
+
+add_executable(chebgrid_1d cheb_grid_1d.cpp)
+target_compile_features(chebgrid_1d PRIVATE cxx_std_17)
