@@ -7,54 +7,110 @@
 #include <iomanip>
 #include <cassert>
 
+
+// Base template
+template <typename T>
+struct function_traits;
+
+// Function pointer
+template <typename Ret, typename... Args>
+struct function_traits<Ret(*)(Args...)> {
+  using return_type = Ret;
+  using argument_tuple = std::tuple<Args...>;
+  static constexpr std::size_t arity = sizeof...(Args);
+  template <std::size_t N>
+  using argument = typename std::tuple_element<N, std::tuple<Args...>>::type;
+};
+
+// Member function pointer (const)
+template <typename Ret, typename Class, typename... Args>
+struct function_traits<Ret(Class::*)(Args...) const> {
+  using return_type = Ret;
+  using argument_tuple = std::tuple<Args...>;
+  static constexpr std::size_t arity = sizeof...(Args);
+  template <std::size_t N>
+  using argument = typename std::tuple_element<N, std::tuple<Args...>>::type;
+};
+
+// Lambda and functor support
+template <typename T>
+struct function_traits : function_traits<decltype(&T::operator())> {
+};
+
+
 constexpr double PI = 3.14159265358979323846;
 
+
+template <typename T>
 struct ChebGrid1D {
-  int N;
-  double a, b;
-  std::vector<double> x; // Chebyshev second-kind nodes
-  std::vector<double> w; // Barycentric weights
+private:
+  using data_t = std::vector<T>;
+public:
+  const std::size_t nodes;
+  const T a, b;
+  const data_t x;
+  const data_t w;
 
-  ChebGrid1D(int n, double a_ = -1, double b_ = 1)
-    : N(n), a(a_), b(b_), x(n), w(n) {
-    for (int i = 0; i < N; ++i) {
-      double theta = (2 * i + 1) * PI / (2 * N);
-      x[i] = map_to_domain(std::cos(theta));
-      w[i] = (1 - 2 * (i % 2)) * std::sin(theta); // alternating sign
+  ChebGrid1D(std::size_t n, T a = T(-1), T b = T(1))
+    : nodes(n), a(a), b(b),
+      x(init_nodes(n, a, b)),
+      w(init_weights(n)) {
+  }
+
+  constexpr T map_to_domain(T x) const {
+    return T(0.5) * ((b - a) * x + (b + a));
+  }
+
+  constexpr T map_from_domain(T x) const {
+    return (T(2) * x - (b + a)) / (b - a);
+  }
+
+private:
+  static data_t init_nodes(std::size_t n, T a, T b) {
+    data_t result(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      const auto theta = T(2 * i + 1) * PI / T(2 * n);
+      const auto x = std::cos(theta);
+      result[i] = T(0.5) * ((b - a) * x + (b + a));
     }
+    return result;
   }
 
-  // Map from [-1, 1] to [a, b]
-  template <class T>
-  constexpr T map_to_domain(const T x) const {
-    return 0.5 * ((b - a) * x + (b + a));
+  static data_t init_weights(std::size_t n) {
+    data_t result(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      const auto theta = T(2 * i + 1) * PI / T(2 * n);
+      result[i] = (T(1) - T(2) * T(i % 2)) * std::sin(theta);
+    }
+    return result;
   }
 
-  // Map from [a, b] to [-1, 1]
-  constexpr double map_from_domain(double x) const {
-    return (2.0 * x - (b + a)) / (b - a);
-  }
 };
+
 
 template <class Func>
 class Cheb1D {
-public:
-  Cheb1D(Func F, const ChebGrid1D &data)
-    : N(data.N), low(data.b - data.a), hi(data.b + data.a), coeffs(N) {
+  using traits = function_traits<Func>;
+  using input_t = typename traits::template argument<0>;
+  using output_t = typename traits::return_type;
 
-    std::vector<double> fvals(N);
-    for (int i = 0; i < N; ++i) {
+public:
+  Cheb1D(const Func& F, const ChebGrid1D<input_t> &data)
+    : nodes(data.nodes), low(data.b - data.a), hi(data.b + data.a), coeffs(nodes) {
+
+    std::vector<output_t> fvals(nodes);
+    for (int i = 0; i < nodes; ++i) {
       fvals[i] = F(data.x[i]);
     }
 
     // Projection using Chebyshev second-kind nodes (DCT-II style)
-    for (int m = 0; m < N; ++m) {
-      double sum = 0.0;
-      for (int k = 0; k < N; ++k) {
-        double theta = (2 * k + 1) * PI / (2 * N);
+    for (auto m = 0; m < nodes; ++m) {
+      input_t sum = 0.0;
+      for (int k = 0; k < nodes; ++k) {
+        input_t theta = (2 * k + 1) * PI / (2 * nodes);
         sum += fvals[k] * std::cos(m * theta);
       }
-      coeffs[m] = (2.0 / N) * sum;
+      coeffs[m] = (2.0 / nodes) * sum;
     }
 
     coeffs[0] *= 0.5; // normalization adjustment
@@ -68,7 +124,7 @@ public:
     double c0 = coeffs[0];
     double c1 = coeffs[1];
 
-    for (int i = 2; i < N; ++i) {
+    for (int i = 2; i < nodes; ++i) {
       const double tmp = c1;
       c1 = coeffs[i] - c0;
       c0 = c0 * x2 + tmp;
@@ -78,7 +134,7 @@ public:
   }
 
 private:
-  const int N;
+  const int nodes;
   double low, hi;
   std::vector<double> coeffs;
 
@@ -89,15 +145,19 @@ private:
 
 template <class Func>
 class BarCheb1D {
+  using traits = function_traits<Func>;
+  using input_t = typename traits::template argument<0>;
+  using output_t = typename traits::return_type;
+
 public:
-  BarCheb1D(Func F, const ChebGrid1D &data)
-    : N(data.N), a(data.a), b(data.b), x(data.x), w(data.w), fvals(N) {
+  BarCheb1D(Func F, const ChebGrid1D<input_t> &data)
+    : N(data.nodes), a(data.a), b(data.b), x(data.x), w(data.w), fvals(N) {
     for (int i = 0; i < N; ++i) {
       fvals[i] = F(x[i]);
     }
   }
 
-  double operator()(double pt) const {
+  double operator()(const double pt) const {
     for (int i = 0; i < N; ++i) {
       if (pt == x[i]) { return fvals[i]; }
     }
@@ -136,9 +196,9 @@ void test(V &&f) {
 
   std::cout << std::setprecision(6) << std::scientific;
   std::cout << "x"
-            << std::setw(20) << "f(x)"
-            << std::setw(20) << "Interp(x)"
-            << std::setw(20) << "Rel. Error\n";
+      << std::setw(20) << "f(x)"
+      << std::setw(20) << "Interp(x)"
+      << std::setw(20) << "Rel. Error\n";
   std::cout << std::string(80, '-') << "\n";
 
   for (int i = 0; i < 15; ++i) {
