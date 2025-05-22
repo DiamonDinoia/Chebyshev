@@ -1,0 +1,4 @@
+Language: Cpp
+BasedOnStyle: LLVM
+# line length 120
+ColumnLimit: 120
