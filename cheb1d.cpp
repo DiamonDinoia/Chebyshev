@@ -10,7 +10,7 @@
 
 template <typename T, typename V>
 void test(V &&f) {
-  int n = 33; // Number of Chebyshev nodes (degree = n - 1)
+  int n = 16; // Number of Chebyshev nodes (degree = n - 1)
   double a = -1.5, b = 1.5;
 
   T interpolator(f, n, a, b);
@@ -52,5 +52,7 @@ int main() {
   test<FixedEst<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n\n\n";
   test<OptHor<decltype(f)>>(f);
+  std::cout << std::string(80, '-') << "\n\n\n";
+  test<LSQ1D<decltype(f)>>(f);
 }
 

@@ -149,6 +149,177 @@ private:
 };
 
 
+// Generate n Chebyshev nodes of the first kind on [-1,1]
+inline std::vector<double> chebyshev_nodes(int n) {
+  std::vector<double> v(n);
+  for (int k = 0; k < n; ++k)
+    v[k] = std::cos((2.0 * k + 1.0) * PI / (2.0 * n));
+  return v;
+}
+
+// Affine maps between normalized [-1,1] and [a,b]
+inline double map_to_domain(double x, double a, double b) {
+  return 0.5 * ((b - a) * x + (b + a));
+}
+
+inline double map_from_domain(double x, double a, double b) {
+  return (2.0 * x - (b + a)) / (b - a);
+}
+
+// Horner evaluation: coeffs in ascending order (c0 + c1*x + ...)
+inline double horner(const std::vector<double> &c, double x) {
+  if (c.empty())
+    return 0.0;
+  double y = c.back();
+  for (auto it = c.rbegin() + 1; it != c.rend(); ++it)
+    y = y * x + *it;
+  return y;
+}
+
+// Solve symmetric positive-definite system via Gaussian elimination (A square)
+inline std::vector<double> solve(std::vector<std::vector<double>> A, std::vector<double> b) {
+  int n = (int)A.size();
+  assert((int)b.size() == n);
+  for (int k = 0; k < n; ++k) {
+    // pivot
+    int piv = k;
+    double maxv = std::abs(A[k][k]);
+    for (int i = k + 1; i < n; ++i) {
+      double v = std::abs(A[i][k]);
+      if (v > maxv) {
+        maxv = v;
+        piv = i;
+      }
+    }
+    assert(maxv != 0.0 && "Singular normal equations");
+    if (piv != k) {
+      std::swap(A[piv], A[k]);
+      std::swap(b[piv], b[k]);
+    }
+    // normalize
+    double diag = A[k][k];
+    for (int j = k; j < n; ++j)
+      A[k][j] /= diag;
+    b[k] /= diag;
+    // eliminate below
+    for (int i = k + 1; i < n; ++i) {
+      double f = A[i][k];
+      for (int j = k; j < n; ++j)
+        A[i][j] -= f * A[k][j];
+      b[i] -= f * b[k];
+    }
+  }
+  // back-substitute
+  std::vector<double> x(n);
+  for (int i = n - 1; i >= 0; --i) {
+    double s = b[i];
+    for (int j = i + 1; j < n; ++j)
+      s -= A[i][j] * x[j];
+    x[i] = s;
+  }
+  return x;
+}
+
+// -----------------------------------------------------------------------------
+// LSQ1D: monomial least-squares fit using Chebyshev sampling
+// -----------------------------------------------------------------------------
+template <class Func>
+class LSQ1D {
+public:
+    LSQ1D(Func F, int n, double a = -1.0, double b = 1.0)
+        : deg_(n), a_(a), b_(b), coeffs_(n)
+    {
+        assert(n > 0 && "Polynomial degree must be positive");
+
+        // 1. Chebyshev nodes (1st kind) on [‑1,1]
+        std::vector<double> x(deg_);
+        for (int k = 0; k < deg_; ++k)
+            x[k] = std::cos((2 * k + 1) * M_PI / (2.0 * deg_));
+
+        // 2. RHS samples
+        std::vector<double> y(deg_);
+        for (int i = 0; i < deg_; ++i)
+            y[i] = F(map_to_domain(x[i]));
+
+        // 3. Solve the Vandermonde system with Björck‑Pereyra → Newton coeffs
+        std::vector<double> newton = bjorck_pereyra(x, y);
+
+        // 4. Convert Newton basis → monomial basis
+        newton_to_monomial(newton, x, coeffs_);
+    }
+
+    // Evaluate on original [a,b]
+    double operator()(double pt) const noexcept {
+        double x = map_from_domain(pt);
+        return horner(coeffs_, x);
+    }
+
+    const std::vector<double>& coeffs() const noexcept { return coeffs_; }
+
+private:
+    int deg_;                    // number of coefficients / nodes
+    double a_, b_;               // target interval
+    std::vector<double> coeffs_; // monomial coefficients (low → high)
+
+    // ---------------- Utility mapping functions ----------------
+    double map_from_domain(double t) const noexcept {
+        return 2.0 * (t - a_) / (b_ - a_) - 1.0;            // [a,b] → [‑1,1]
+    }
+    double map_to_domain(double x) const noexcept {
+        return 0.5 * (x + 1.0) * (b_ - a_) + a_;            // [‑1,1] → [a,b]
+    }
+
+    static double horner(const std::vector<double>& c, double x) noexcept {
+        double acc = 0.0;
+        for (int k = static_cast<int>(c.size()) - 1; k >= 0; --k)
+            acc = acc * x + c[k];
+        return acc;
+    }
+
+    // ---------------- Björck‑Pereyra solver (Newton form) ----------------
+    // Solves V(x) * a = y for Vandermonde matrix V, returning Newton‑basis
+    // divided‑difference coefficients α[0..n‑1] such that
+    //     P(t) = α₀ + α₁(t‑x₀) + α₂(t‑x₀)(t‑x₁) + …
+    // The implementation follows Algorithm 2.3 of "Numerical Methods for
+    // Computing the Divided Differences" (Björck & Pereyra, 1970).
+    std::vector<double> bjorck_pereyra(const std::vector<double>& x,
+                                       const std::vector<double>& y) const
+    {
+        int n = deg_;
+        std::vector<double> a = y; // working vector (will hold Newton coeffs)
+
+        for (int k = 0; k < n - 1; ++k) {
+            for (int i = n - 1; i >= k + 1; --i)
+                a[i] = (a[i] - a[i - 1]) / (x[i] - x[i - k - 1]);
+        }
+        return a; // Newton divided differences α
+    }
+
+    // --------------- Convert Newton basis → monomial basis ----------------
+    // Input:  α[0..n‑1] (divided differences), nodes x[0..n‑1]
+    // Output: c[0..n‑1] in monomial basis (low‑to‑high)
+    static void newton_to_monomial(const std::vector<double>& alpha,
+                                   const std::vector<double>& nodes,
+                                   std::vector<double>& c)
+    {
+        int n = static_cast<int>(alpha.size());
+        c.assign(1, 0.0); // current polynomial P(t) = 0
+
+        // Build polynomial iteratively: P ← P*(t‑x_i) + α_i  (from high i to 0)
+        for (int i = n - 1; i >= 0; --i) {
+            // Multiply existing polynomial by (t‑x_i)
+            c.push_back(0.0);               // increase degree by 1
+            for (int j = static_cast<int>(c.size()) - 1; j >= 1; --j)
+                c[j] = c[j - 1] - nodes[i] * c[j];
+            c[0] = -nodes[i] * c[0];
+            // Add α_i to constant term
+            c[0] += alpha[i];
+        }
+        // Ensure size n
+        if (static_cast<int>(c.size()) > n) c.resize(n);
+    }
+};
+
 /* ────────────────────────────────────────────────────────────────
  *  Mon1D - evaluate a function approximated by an n-term Chebyshev
  *  expansion, but converted once to a monomial series and then
@@ -479,7 +650,6 @@ public:
 template <class Func>
 class OptHor : public Mon1D<Func> {
 public:
-
   OptHor(Func F, int n, double a = -1.0, double b = 1.0)
     : Mon1D<Func>(F, n, a, b) {
     // reverse to have c[0] first
@@ -494,19 +664,6 @@ public:
 private:
   /* ------------------------------------------------------------------ */
   static constexpr std::size_t MAX_COEFFS = 64;
-
-  /* compile-time tiny-power helper (0 ≤ E ≤ 3) ----------------------- */
-  template <std::size_t E>
-  __always_inline static constexpr double pow_const(double x) {
-    if constexpr (E == 0)
-      return 1.0;
-    else if constexpr (E == 1)
-      return x;
-    else if constexpr (E == 2)
-      return x * x;
-    else
-      return x * x * x; // E == 3
-  }
 
   /* fully unrolled scalar Horner (N ≤ 4) ----------------------------- */
   template <std::size_t N, std::size_t I = N>
@@ -564,12 +721,14 @@ private:
       /* 3) stitch the high- and low-order pieces ---------------- */
       if constexpr (REM == 0) {
         return acc; // no remainder
-      }
-      else {
+      } else {
         const auto rem_pow = [x, x2] constexpr {
-          if constexpr (REM==1) return x;
-          if constexpr (REM==2) return x2;
-          if constexpr (REM==3) return x2*x;
+          if constexpr (REM == 1)
+            return x;
+          if constexpr (REM == 2)
+            return x2;
+          if constexpr (REM == 3)
+            return x2 * x;
           return 0.0;
         }();
         return std::fma(acc, rem_pow, low_part);
