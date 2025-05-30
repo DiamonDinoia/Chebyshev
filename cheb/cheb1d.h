@@ -295,37 +295,129 @@ private:
   // by starting at the highest coefficient and working down.
   // idx = current coefficient index.
   template <std::size_t idx>
-  static constexpr double horner_step(const double* c, double x) {
+  __always_inline static constexpr double horner_step(const double *c, double const x) {
     if constexpr (idx == 0) {
       return c[0];
     } else {
-      return horner_step<idx-1>(c, x) * x + c[idx];
+      return std::fma(horner_step<idx - 1>(c, x), x, c[idx]);
     }
   }
 
   // Evaluate length-N polynomial: calls horner_step<N-1>, or returns 0 if N==0.
   template <std::size_t N>
-  static double eval_fixed(const double* c, double x) {
+  __always_inline static double eval_fixed(const double *c, double x) {
     if constexpr (N == 0) {
       return 0.0;
     } else {
-      return horner_step<N-1>(c, x);
+      return horner_step<N - 1>(c, x);
     }
   }
 
   // Build a constexpr table of pointers to eval_fixed<0>, eval_fixed<1>, ….
   template <std::size_t... Is>
   static constexpr auto make_table(std::index_sequence<Is...>) {
-    using Fn = double(*)(const double*, double);
-    return std::array<Fn, DEFAULT_MAX_COEFFS + 1>{ &eval_fixed<Is>... };
+    using Fn = double(*)(const double *, double);
+    return std::array<Fn, DEFAULT_MAX_COEFFS + 1>{&eval_fixed<Is>...};
   }
 
   // At first call, instantiates the table; then dispatches in O(1).
-  double dispatch_eval(const double* c, std::size_t n, double x) const {
+  double dispatch_eval(const double *c, std::size_t n, double x) const {
     static constexpr auto table =
         make_table(std::make_index_sequence<DEFAULT_MAX_COEFFS + 1>{});
     if (n > DEFAULT_MAX_COEFFS)
       throw std::out_of_range("Polynomial length exceeds DEFAULT_MAX_COEFFS");
+    return table[n](c, x);
+  }
+};
+
+
+// Assume Mon1D<Func> is provided elsewhere
+template <class Func>
+class FixedEst : public Mon1D<Func> {
+public:
+  explicit FixedEst(Func F,
+                    int n,
+                    double a = -1.0,
+                    double b = 1.0)
+    : Mon1D<Func>(F, n, a, b) {
+    // reverse to have c[0] first
+    std::reverse(this->mono.begin(), this->mono.end());
+  }
+
+  double operator()(double pt) const {
+    // map into [-1,1]
+    const double x = this->map_from_domain(pt);
+    // dispatch based on runtime length
+    return dispatch_eval(this->mono.data(), this->mono.size(), x);
+  }
+
+private:
+  // maximum supported degree + 1
+  static constexpr std::size_t DEFAULT_MAX_COEFFS = 64;
+
+  //----------------------------------------
+  // 1) compile-time helper: floor(log2(n))
+  //----------------------------------------
+  static constexpr std::size_t clog2(std::size_t n) {
+    return (n < 2 ? 0 : 1 + clog2(n / 2));
+  }
+
+  //----------------------------------------
+  // 2) Estrin-range: unrolled via if constexpr
+  //----------------------------------------
+  template <std::size_t I, std::size_t M>
+  __always_inline static constexpr double estrin_range(const double *c, const double *xpows) {
+    if constexpr (M == 0) {
+      return 0.0;
+    } else if constexpr (M == 1) {
+      return c[I];
+    } else if constexpr (M == 2) {
+      // c[I] + c[I+1]*x  via fmadd: x = xpows[0]
+      return std::fma(c[I + 1], xpows[0], c[I]);
+    } else {
+      constexpr std::size_t k = clog2(M - 1);
+      constexpr std::size_t block = std::size_t(1) << k;
+      double low = estrin_range<I, block>(c, xpows);
+      double high = estrin_range<I + block, M - block>(c, xpows);
+      return std::fma(high, xpows[k], low);
+    }
+  }
+
+  //----------------------------------------
+  // 3) Single-call entry: build xpows + recurse
+  //----------------------------------------
+  template <std::size_t N>
+  __always_inline static double eval_fixed(const double *coeffs, double x) {
+    constexpr std::size_t max_exp = (N > 1 ? N - 1 : 1);
+    constexpr std::size_t maxk = clog2(max_exp);
+
+    std::array<double, maxk + 1> xpows{};
+    xpows[0] = x;
+    for (std::size_t k = 1; k <= maxk; ++k)
+      xpows[k] = xpows[k - 1] * xpows[k - 1];
+
+    return estrin_range<0, N>(coeffs, xpows.data());
+  }
+
+  //----------------------------------------
+  // 4) Build constexpr dispatch table
+  //----------------------------------------
+  template <std::size_t... Is>
+  static constexpr auto make_table(std::index_sequence<Is...>) {
+    using Fn = double(*)(const double *, double);
+    return std::array<Fn, DEFAULT_MAX_COEFFS + 1>{&eval_fixed<Is>...};
+  }
+
+  //----------------------------------------
+  // 5) Runtime dispatcher
+  //----------------------------------------
+  double dispatch_eval(const double *c, std::size_t n, double x) const {
+    static constexpr auto table =
+        make_table(std::make_index_sequence<DEFAULT_MAX_COEFFS + 1>{});
+
+    if (n > DEFAULT_MAX_COEFFS)
+      throw std::out_of_range("Polynomial length exceeds DEFAULT_MAX_COEFFS");
+
     return table[n](c, x);
   }
 };
@@ -384,93 +476,123 @@ public:
   }
 };
 
-// Assume Mon1D<Func> is provided elsewhere
 template <class Func>
-class FixedEst : public Mon1D<Func> {
+class OptHor : public Mon1D<Func> {
 public:
-  explicit FixedEst(Func F,
-                    int n,
-                    double a = -1.0,
-                    double b = 1.0)
+
+  OptHor(Func F, int n, double a = -1.0, double b = 1.0)
     : Mon1D<Func>(F, n, a, b) {
     // reverse to have c[0] first
     std::reverse(this->mono.begin(), this->mono.end());
   }
 
   double operator()(double pt) const {
-    // map into [-1,1]
-    const double x = this->map_from_domain(pt);
-    // dispatch based on runtime length
+    double x = this->map_from_domain(pt);
     return dispatch_eval(this->mono.data(), this->mono.size(), x);
   }
 
 private:
-  // maximum supported degree + 1
-  static constexpr std::size_t DEFAULT_MAX_COEFFS = 64;
+  /* ------------------------------------------------------------------ */
+  static constexpr std::size_t MAX_COEFFS = 64;
 
-  //----------------------------------------
-  // 1) compile-time helper: floor(log2(n))
-  //----------------------------------------
-  static constexpr std::size_t clog2(std::size_t n) {
-    return (n < 2 ? 0 : 1 + clog2(n / 2));
+  /* compile-time tiny-power helper (0 ≤ E ≤ 3) ----------------------- */
+  template <std::size_t E>
+  __always_inline static constexpr double pow_const(double x) {
+    if constexpr (E == 0)
+      return 1.0;
+    else if constexpr (E == 1)
+      return x;
+    else if constexpr (E == 2)
+      return x * x;
+    else
+      return x * x * x; // E == 3
   }
 
-  //----------------------------------------
-  // 2) Estrin-range: unrolled via if constexpr
-  //----------------------------------------
-  template <std::size_t I, std::size_t M>
-  static constexpr double estrin_range(const double *c, const double *xpows) {
-    if constexpr (M == 0) {
+  /* fully unrolled scalar Horner (N ≤ 4) ----------------------------- */
+  template <std::size_t N, std::size_t I = N>
+  __always_inline static constexpr double horner_step(const double *c,
+                                                      double x) {
+    if constexpr (I == 0)
+      return c[0];
+    else
+      return std::fma(horner_step<N, I - 1>(c, x),
+                      x, c[I]);
+  }
+
+  template <std::size_t N>
+  __always_inline static constexpr double eval_scalar(const double *c,
+                                                      double x) {
+    if constexpr (N == 0)
       return 0.0;
-    } else if constexpr (M == 1) {
-      return c[I];
-    } else if constexpr (M == 2) {
-      // c[I] + c[I+1]*x  via fmadd: x = xpows[0]
-      return std::fma(c[I + 1], xpows[0], c[I]);
+    else
+      return horner_step<N, N - 1>(c, x);
+  }
+
+  /* evaluate a *single* 4-term block: c0 + c1 x + c2 x² + c3 x³ ------ */
+  __always_inline static double
+  eval_block4(const double *c, double x) // c points at c0
+  {
+    return std::fma(std::fma(std::fma(c[3], x, c[2]), x, c[1]), x, c[0]);
+  }
+
+  /* --------------------- corrected 4-way evaluator ------------------ */
+  template <std::size_t N>
+  __always_inline static double eval_fixed(const double *c, double x) {
+    if constexpr (N <= 4) {
+      // tiny => scalar Horner
+      return eval_scalar<N>(c, x);
     } else {
-      constexpr std::size_t k = clog2(M - 1);
-      constexpr std::size_t block = std::size_t(1) << k;
-      double low = estrin_range<I, block>(c, xpows);
-      double high = estrin_range<I + block, M - block>(c, xpows);
-      return std::fma(high, xpows[k], low);
+      /* 1) peel the low-order remainder (N mod 4) ---------------- */
+      constexpr std::size_t REM = N & 3;
+      double low_part = eval_scalar<REM>(c, x);
+      c += REM;
+
+      /* 2) gather the high-order blocks -------------------------- */
+      constexpr std::size_t NBLOCK = (N - REM) / 4;
+      double acc = eval_block4(c + 4 * (NBLOCK - 1), x); // top block
+
+      /* pre-compute x⁴ once (used to shift each block) ----------- */
+      double x2 = x * x;
+      double x4 = x2 * x2;
+
+      /* walk remaining blocks top→bottom, shifting by x⁴ each step */
+      for (std::size_t b = NBLOCK - 1; b--;) {
+        acc = std::fma(acc, x4, // acc * x⁴ + next-blk
+                       eval_block4(c + 4 * b, x));
+      }
+
+      /* 3) stitch the high- and low-order pieces ---------------- */
+      if constexpr (REM == 0) {
+        return acc; // no remainder
+      }
+      else {
+        const auto rem_pow = [x, x2] constexpr {
+          if constexpr (REM==1) return x;
+          if constexpr (REM==2) return x2;
+          if constexpr (REM==3) return x2*x;
+          return 0.0;
+        }();
+        return std::fma(acc, rem_pow, low_part);
+      }
     }
   }
 
-  //----------------------------------------
-  // 3) Single-call entry: build xpows + recurse
-  //----------------------------------------
-  template <std::size_t N>
-  static double eval_fixed(const double *coeffs, double x) {
-    constexpr std::size_t max_exp = (N > 1 ? N - 1 : 1);
-    constexpr std::size_t maxk = clog2(max_exp);
-
-    std::array<double, maxk + 1> xpows{};
-    xpows[0] = x;
-    for (std::size_t k = 1; k <= maxk; ++k)
-      xpows[k] = xpows[k - 1] * xpows[k - 1];
-
-    return estrin_range<0, N>(coeffs, xpows.data());
-  }
-
-  //----------------------------------------
-  // 4) Build constexpr dispatch table
-  //----------------------------------------
+  /* -------------------- zero-overhead dispatch ---------------------- */
   template <std::size_t... Is>
   static constexpr auto make_table(std::index_sequence<Is...>) {
-    using Fn = double(*)(const double *, double);
-    return std::array<Fn, DEFAULT_MAX_COEFFS + 1>{&eval_fixed<Is>...};
+    using Fn = double (*)(const double *, double);
+    return std::array<Fn, MAX_COEFFS + 1>{&eval_fixed<Is>...};
   }
 
-  //----------------------------------------
-  // 5) Runtime dispatcher
-  //----------------------------------------
-  double dispatch_eval(const double *c, std::size_t n, double x) const {
-    static constexpr auto table =
-        make_table(std::make_index_sequence<DEFAULT_MAX_COEFFS + 1>{});
+  double dispatch_eval(const double *c,
+                       std::size_t n,
+                       double x) const {
+    static constexpr auto tbl =
+        make_table(std::make_index_sequence<MAX_COEFFS + 1>{});
 
-    if (n > DEFAULT_MAX_COEFFS)
-      throw std::out_of_range("Polynomial length exceeds DEFAULT_MAX_COEFFS");
+    if (n > MAX_COEFFS)
+      throw std::out_of_range("Polynomial too long for OptHor");
 
-    return table[n](c, x);
+    return tbl[n](c, x); // fully inlined, branch-free
   }
 };

@@ -1,6 +1,7 @@
 #include "cheb1d.h"
 #include <nanobench.h>
 #include <cmath>
+#include <iostream>
 #include <random>
 
 template <typename T, typename V>
@@ -22,16 +23,17 @@ int main() {
   auto f = [](double x) { return std::exp(x) + 1; };
 
   ankerl::nanobench::Bench bench;
-  bench.title("Chebyshev Interpolation Benchmark").unit("evals").warmup(100).relative(true);
+  bench.title("Chebyshev Interpolation Benchmark").unit("evals").warmup(100).relative(true).minEpochIterations(10'000'000);
 
-  for (size_t n = 2; n <= 64; n *= 2) {
+  for (size_t n = 1; n <= 16; n += 1) {
     // bench_interpolation<Cheb1D<decltype(f)>>(bench, "Cheb1D", n, f);
     // bench_interpolation<BarCheb1D<decltype(f)>>(bench, "BarCheb1D", n, f);
     bench_interpolation<Hor1D<decltype(f)>>(bench, "Hor1D", n, f);
     bench_interpolation<FixedHor<decltype(f)>>(bench, "FixedHor", n, f);
     bench_interpolation<Est1D<decltype(f)>>(bench, "Est1D", n, f);
     bench_interpolation<FixedEst<decltype(f)>>(bench, "FixedEst", n, f);
-
+    bench_interpolation<OptHor<decltype(f)>>(bench, "OptHor", n, f);
+    std::cout << std::string(1000, '-') << "\n";
   }
 
   return 0;

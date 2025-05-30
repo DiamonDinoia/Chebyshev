@@ -50,5 +50,7 @@ int main() {
   test<Est1D<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n\n\n";
   test<FixedEst<decltype(f)>>(f);
+  std::cout << std::string(80, '-') << "\n\n\n";
+  test<OptHor<decltype(f)>>(f);
 }
 
