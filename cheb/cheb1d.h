@@ -227,46 +227,46 @@ template <class Func>
 class LSQ1D {
 public:
     LSQ1D(Func F, int n, double a = -1.0, double b = 1.0)
-        : deg_(n), a_(a), b_(b), coeffs_(n)
+        : deg_(n), a_(a), b_(b)
     {
         assert(n > 0 && "Polynomial degree must be positive");
 
-        // 1. Chebyshev nodes (1st kind) on [‑1,1]
+        // 1. Chebyshev nodes (1st kind) on [-1,1]
         std::vector<double> x(deg_);
         for (int k = 0; k < deg_; ++k)
-            x[k] = std::cos((2 * k + 1) * M_PI / (2.0 * deg_));
+            x[k] = std::cos((2.0 * k + 1) * M_PI / (2.0 * deg_));
 
-        // 2. RHS samples
+        // 2. RHS samples on original domain
         std::vector<double> y(deg_);
         for (int i = 0; i < deg_; ++i)
             y[i] = F(map_to_domain(x[i]));
 
-        // 3. Solve the Vandermonde system with Björck‑Pereyra → Newton coeffs
-        std::vector<double> newton = bjorck_pereyra(x, y);
+        // 3. Newton divided differences via Björck‑Pereyra
+        std::vector<double> newton = björck_pereyra(x, y);
 
-        // 4. Convert Newton basis → monomial basis
-        newton_to_monomial(newton, x, coeffs_);
+        // 4. Convert to monomial basis (function now returns vector)
+        coeffs_ = newton_to_monomial(newton, x);
     }
 
-    // Evaluate on original [a,b]
+    // Evaluate interpolant on [a,b]
     double operator()(double pt) const noexcept {
-        double x = map_from_domain(pt);
-        return horner(coeffs_, x);
+        double xi = map_from_domain(pt);
+        return horner(coeffs_, xi);
     }
 
     const std::vector<double>& coeffs() const noexcept { return coeffs_; }
 
 private:
-    int deg_;                    // number of coefficients / nodes
-    double a_, b_;               // target interval
-    std::vector<double> coeffs_; // monomial coefficients (low → high)
+    int deg_;
+    double a_, b_;
+    std::vector<double> coeffs_;
 
-    // ---------------- Utility mapping functions ----------------
+    // ---------------- Mapping helpers ----------------
     double map_from_domain(double t) const noexcept {
-        return 2.0 * (t - a_) / (b_ - a_) - 1.0;            // [a,b] → [‑1,1]
+        return 2.0 * (t - a_) / (b_ - a_) - 1.0;
     }
     double map_to_domain(double x) const noexcept {
-        return 0.5 * (x + 1.0) * (b_ - a_) + a_;            // [‑1,1] → [a,b]
+        return 0.5 * (x + 1.0) * (b_ - a_) + a_;
     }
 
     static double horner(const std::vector<double>& c, double x) noexcept {
@@ -276,43 +276,36 @@ private:
         return acc;
     }
 
-    // ---------------- Björck‑Pereyra solver (Newton form) ----------------
-    // Solves V(x) * a = y for Vandermonde matrix V, returning Newton‑basis
-    // divided‑difference coefficients α[0..n‑1] such that
-    //     P(t) = α0 + α1(t‑x0) + α2(t‑x0)(t‑x1) + …
-    std::vector<double> bjorck_pereyra(const std::vector<double>& x,
+    // ------------- Björck‑Pereyra Newton solver -------------
+    std::vector<double> björck_pereyra(const std::vector<double>& x,
                                        const std::vector<double>& y) const
     {
         int n = deg_;
-        std::vector<double> a = y; // working vector (will hold Newton coeffs)
-
-        for (int k = 0; k < n - 1; ++k) {
+        std::vector<double> a = y; // mutable copy
+        for (int k = 0; k < n - 1; ++k)
             for (int i = n - 1; i >= k + 1; --i)
                 a[i] = (a[i] - a[i - 1]) / (x[i] - x[i - k - 1]);
-        }
-        return a; // Newton divided differences α
+        return a; // Newton coefficients
     }
 
-    // --------------- Convert Newton basis → monomial basis ----------------
-    // Input:  α[0..n‑1] (divided differences), nodes x[0..n‑1]
-    // Output: c[0..n‑1] in monomial basis (low‑to‑high)
-    static void newton_to_monomial(const std::vector<double>& alpha,
-                                   const std::vector<double>& nodes,
-                                   std::vector<double>& c)
+    // -------- Convert Newton → monomial and *return* vector --------
+    static std::vector<double> newton_to_monomial(const std::vector<double>& alpha,
+                                                  const std::vector<double>& nodes)
     {
         int n = static_cast<int>(alpha.size());
-        c.assign(1, 0.0); // current polynomial P(t) = 0
+        std::vector<double> c(1, 0.0); // start with zero polynomial
 
-        // Build polynomial iteratively: P ← P*(t‑x_i) + α_i  (from high i to 0)
         for (int i = n - 1; i >= 0; --i) {
-            // Multiply existing polynomial by (t‑x_i)
-            c.push_back(0.0);               // increase degree by 1
+            // Multiply current polynomial by (t - x_i)
+            c.push_back(0.0);
             for (int j = static_cast<int>(c.size()) - 1; j >= 1; --j)
                 c[j] = c[j - 1] - nodes[i] * c[j];
             c[0] = -nodes[i] * c[0];
-            // Add α_i to constant term
+            // Add alpha_i
             c[0] += alpha[i];
         }
+        if (static_cast<int>(c.size()) > n) c.resize(n);
+        return c;
     }
 };
 
