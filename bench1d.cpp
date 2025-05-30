@@ -28,11 +28,9 @@ int main() {
     // bench_interpolation<Cheb1D<decltype(f)>>(bench, "Cheb1D", n, f);
     // bench_interpolation<BarCheb1D<decltype(f)>>(bench, "BarCheb1D", n, f);
     bench_interpolation<Hor1D<decltype(f)>>(bench, "Hor1D", n, f);
+    bench_interpolation<FixedHor<decltype(f)>>(bench, "FixedHor", n, f);
     bench_interpolation<Est1D<decltype(f)>>(bench, "Est1D", n, f);
-    bench_interpolation<FixedEst<decltype(f)>>(bench, "Fixed", n, f);
-    // bench_interpolation<Ext1D<decltype(f)>>(bench, "Ext1D", n, f);
-    bench_interpolation<Mix1D<decltype(f)>>(bench, "Mix1D", n, f);
-    // bench_interpolation<Rus1D<decltype(f)>>(bench, "Rus1D", n, f);
+    bench_interpolation<FixedEst<decltype(f)>>(bench, "FixedEst", n, f);
 
   }
 

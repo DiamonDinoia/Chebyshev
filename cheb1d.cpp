@@ -45,13 +45,9 @@ int main() {
   std::cout << std::string(80, '-') << "\n\n\n";
   test<Hor1D<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n\n\n";
+  test<FixedHor<decltype(f)>>(f);
+  std::cout << std::string(80, '-') << "\n\n\n";
   test<Est1D<decltype(f)>>(f);
-  std::cout << std::string(80, '-') << "\n\n\n";
-  test<Mix1D<decltype(f)>>(f);
-  std::cout << std::string(80, '-') << "\n\n\n";
-  test<Ext1D<decltype(f)>>(f);
-  std::cout << std::string(80, '-') << "\n\n\n";
-  test<Rus1D<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n\n\n";
   test<FixedEst<decltype(f)>>(f);
 }
