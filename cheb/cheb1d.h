@@ -279,9 +279,7 @@ private:
     // ---------------- Björck‑Pereyra solver (Newton form) ----------------
     // Solves V(x) * a = y for Vandermonde matrix V, returning Newton‑basis
     // divided‑difference coefficients α[0..n‑1] such that
-    //     P(t) = α₀ + α₁(t‑x₀) + α₂(t‑x₀)(t‑x₁) + …
-    // The implementation follows Algorithm 2.3 of "Numerical Methods for
-    // Computing the Divided Differences" (Björck & Pereyra, 1970).
+    //     P(t) = α0 + α1(t‑x0) + α2(t‑x0)(t‑x1) + …
     std::vector<double> bjorck_pereyra(const std::vector<double>& x,
                                        const std::vector<double>& y) const
     {
@@ -315,8 +313,6 @@ private:
             // Add α_i to constant term
             c[0] += alpha[i];
         }
-        // Ensure size n
-        if (static_cast<int>(c.size()) > n) c.resize(n);
     }
 };
 
