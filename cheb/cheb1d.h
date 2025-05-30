@@ -242,7 +242,7 @@ public:
             y[i] = F(map_to_domain(x[i]));
 
         // 3. Newton divided differences via Björck‑Pereyra
-        std::vector<double> newton = björck_pereyra(x, y);
+        std::vector<double> newton = bjorck_pereyra(x, y);
 
         // 4. Convert to monomial basis (function now returns vector)
         coeffs_ = newton_to_monomial(newton, x);
@@ -277,7 +277,7 @@ private:
     }
 
     // ------------- Björck‑Pereyra Newton solver -------------
-    std::vector<double> björck_pereyra(const std::vector<double>& x,
+    std::vector<double> bjorck_pereyra(const std::vector<double>& x,
                                        const std::vector<double>& y) const
     {
         int n = deg_;
