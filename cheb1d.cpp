@@ -5,15 +5,18 @@
 #include <iomanip>
 #include <cassert>
 
+
+#include <xsimd/xsimd.hpp>
+
 template <typename T, typename V>
 void test(V &&f) {
-  int n = 17; // Number of Chebyshev nodes (degree = n - 1)
+  int n = 33; // Number of Chebyshev nodes (degree = n - 1)
   double a = -1.5, b = 1.5;
 
   T interpolator(f, n, a, b);
 
   std::cout << "Chebyshev interpolation test on random samples:\n";
-  std::cout << "Function: f(x) = exp(x)+1, Domain: [" << a << ", " << b << "], Nodes: " << n << "\n\n";
+  std::cout << "Function: f(x) = cos(x), Domain: [" << a << ", " << b << "], Nodes: " << n << "\n\n";
 
   std::mt19937 rng(42);
   std::uniform_real_distribution<double> dist(a, b);
@@ -35,9 +38,21 @@ void test(V &&f) {
 }
 
 int main() {
-  auto f = [](double x) { return std::exp(x) + 1; };
+  auto f = [](const double x) { return std::cos(x); };
   test<Cheb1D<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n\n\n";
   test<BarCheb1D<decltype(f)>>(f);
-  return 0;
+  std::cout << std::string(80, '-') << "\n\n\n";
+  test<Hor1D<decltype(f)>>(f);
+  std::cout << std::string(80, '-') << "\n\n\n";
+  test<Est1D<decltype(f)>>(f);
+  std::cout << std::string(80, '-') << "\n\n\n";
+  test<Mix1D<decltype(f)>>(f);
+  std::cout << std::string(80, '-') << "\n\n\n";
+  test<Ext1D<decltype(f)>>(f);
+  std::cout << std::string(80, '-') << "\n\n\n";
+  test<Rus1D<decltype(f)>>(f);
+  std::cout << std::string(80, '-') << "\n\n\n";
+  test<FixedEst<decltype(f)>>(f);
 }
+
