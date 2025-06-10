@@ -405,6 +405,7 @@ private:
     newton_to_monomial_constexpr(const std::array<OutputType, N_DEGREE> &alpha,
                                  const std::array<InputType, N_DEGREE> &nodes) noexcept {
         std::array<OutputType, N_DEGREE> c{}; // Initialize to zeros
+
         // This algorithm needs careful adaptation for fixed-size array and no push_back/resize.
         // It iteratively builds the polynomial coefficients.
         // The standard algorithm typically involves dynamic sizing.
@@ -465,11 +466,63 @@ private:
     }
 };
 
-
 // -----------------------------------------------------------------------------
 // make_constexpr_func_eval: Full compile-time fitting API (C++20 only)
+// Finds minimum N up to MaxN_val at compile-time and returns a ConstexprFuncEval
+// with that specific N. This requires a helper struct to manage the
+// recursive compile-time search for N.
 // -----------------------------------------------------------------------------
 #if __cplusplus >= 202002L
+
+namespace internal {
+    template <std::size_t CurrentN, std::size_t MaxN_val, std::size_t NumEvalPoints_val, std::size_t Iters_compile_time, class Func, typename InputType, typename OutputType>
+    constexpr auto find_optimal_constexpr_eval_impl(Func F, InputType a, InputType b, double eps_val) {
+        // Base case: If CurrentN exceeds MaxN_val, return the evaluator for MaxN_val
+        if constexpr (CurrentN > MaxN_val) {
+            std::cout << "Warning: Did not converge to epsilon " << std::scientific << std::setprecision(4) << eps_val
+                      << " within MaxN = " << MaxN_val << ". Returning ConstexprFuncEval with degree " << MaxN_val << ".\n";
+            return ConstexprFuncEval<Func, MaxN_val, Iters_compile_time>(F, a, b);
+        } else {
+            // Instantiate ConstexprFuncEval for CurrentN
+            ConstexprFuncEval<Func, CurrentN, Iters_compile_time> current_evaluator(F, a, b);
+
+            // Generate evaluation points at compile time
+            constexpr std::array<InputType, NumEvalPoints_val> eval_points = constexpr_linspace<InputType, NumEvalPoints_val>(a, b);
+
+            double max_observed_error = 0.0;
+            for (std::size_t i = 0; i < NumEvalPoints_val; ++i) {
+                InputType pt = eval_points[i];
+                OutputType actual_val = F(pt);
+                OutputType poly_val = current_evaluator(pt);
+
+                // Handle division by zero for actual_val if it's zero
+                if (std::abs(actual_val) < std::numeric_limits<OutputType>::epsilon()) {
+                    // If actual_val is near zero, consider absolute error
+                    double current_abs_error = std::abs(poly_val);
+                    if (current_abs_error > max_observed_error) {
+                        max_observed_error = current_abs_error;
+                    }
+                } else {
+                    double current_abs_error = std::abs(1.0 - std::abs(poly_val / actual_val));
+                    if (current_abs_error > max_observed_error) {
+                        max_observed_error = current_abs_error;
+                    }
+                }
+            }
+
+            if (max_observed_error <= eps_val) {
+                std::cout << "Converged: Found min degree N = " << CurrentN
+                          << " (Max Error: " << std::scientific << std::setprecision(4) << max_observed_error
+                          << " <= Epsilon: " << eps_val << ")\n";
+                return current_evaluator; // Return the evaluator for the converged degree
+            } else {
+                // Recurse to the next degree
+                return find_optimal_constexpr_eval_impl<CurrentN + 1, MaxN_val, NumEvalPoints_val, Iters_compile_time>(F, a, b, eps_val);
+            }
+        }
+    }
+} // namespace internal
+
 template <double eps_val, std::size_t MaxN_val, std::size_t NumEvalPoints_val, std::size_t Iters_compile_time = 1, class Func>
 constexpr auto make_constexpr_func_eval(Func F,
                                         typename function_traits<Func>::arg0_type a,
@@ -480,82 +533,36 @@ constexpr auto make_constexpr_func_eval(Func F,
     static_assert(MaxN_val > 0, "Max polynomial degree for compile-time fitting must be positive.");
     static_assert(NumEvalPoints_val > 1, "Number of evaluation points for compile-time fitting must be greater than 1.");
 
-    // Generate evaluation points at compile time
-    constexpr std::array<InputType, NumEvalPoints_val> eval_points = constexpr_linspace<InputType, NumEvalPoints_val>(a, b);
-
-    // Iteratively try degrees until error tolerance is met
-    for (std::size_t n = 1; n <= MaxN_val; ++n) {
-        // Create a constexpr evaluator for the current degree 'n'
-        // This requires ConstexprFuncEval to be templated on 'n'
-        // And the constructor needs to take the function, a, b directly.
-        // We'll need a helper struct to hold the ConstexprFuncEval
-        // and return it, as 'auto' can't deduce a changing template parameter.
-
-        // This is the tricky part: how to return a ConstexprFuncEval with a dynamic 'N'
-        // determined at compile time. The only way is to return a templated struct
-        // or to make N a parameter of the returned object (which defeats static array).
-
-        // For now, let's assume we want to return the FIRST one that converges.
-        // The return type *must* be concrete at compile time.
-        // This means we can't truly return `ConstexprFuncEval<Func, n, Iters_compile_time>`.
-        // The best we can do is return a fixed-size `ConstexprFuncEval<Func, MaxN_val, ...>`
-        // and then check the error.
-
-        // A better approach for finding the minimal N at compile-time is to use
-        // recursive constexpr templates or a constexpr lambda that can evaluate
-        // functions based on N and return the *smallest* N that satisfies the condition.
-
-        // Let's refine this API. Instead of returning the FuncEval,
-        // we return the degree it converged to, or a sentinel value.
-        // Or, more practically, we pre-select the max degree and accept that.
-
-        // For a true "find min N at compile time", we'd need a helper:
-        // template<std::size_t CurrentN>
-        // constexpr std::size_t find_min_n_impl(...) {
-        //   if (CurrentN > MaxN_val) return MaxN_val;
-        //   ConstexprFuncEval<Func, CurrentN, Iters_compile_time> current_evaluator(F, a, b);
-        //   // ... check error ...
-        //   if (error <= eps_val) return CurrentN;
-        //   return find_min_n_impl<CurrentN + 1>(...);
-        // }
-
-        // Given the complexity, for a first step, let's just make the
-        // make_constexpr_func_eval return ConstexprFuncEval for a specific fixed degree,
-        // and add a separate helper to *determine* the optimal degree at compile time.
-
-        // Re-thinking the request: "allows to do the entire fitting at compile time"
-        // This implies the coefficients themselves are computed at compile time.
-        // The previous `make_func_eval` C++20 overload *returned* a `FuncEval`
-        // which still did its *fitting* at runtime (because it uses std::vector internally).
-
-        // New Plan for `make_constexpr_func_eval`:
-        // It takes the *target degree* (N_DEGREE) as a template parameter.
-        // It directly returns a `ConstexprFuncEval<Func, N_DEGREE, Iters_compile_time>`.
-        // The *finding* of the minimum N for a given error tolerance is a separate, more advanced constexpr problem.
-        // For now, this new API just *fits* a polynomial of a given compile-time degree.
-
-        // Let's remove the loop and error checking from this specific new API
-        // to simplify it to pure compile-time fitting for a *fixed* N.
-        // The user would then use the existing runtime `make_func_eval` or
-        // a future, more complex constexpr helper to find the optimal N.
-        // The title "allows to do the entire fitting at compile time" implies *fixed* N.
-
-        // So, this is for a pre-determined N_compile_time_target
-        static_assert(MaxN_val == 0, "Do not use MaxN_val in make_constexpr_func_eval directly; use N_DEGREE template parameter instead.");
-        static_assert(NumEvalPoints_val == 0, "Do not use NumEvalPoints_val in make_constexpr_func_eval directly; use N_DEGREE template parameter instead.");
-        static_assert(eps_val == 0.0, "Do not use eps_val in make_constexpr_func_eval directly; it's for finding N.");
-
-        // This overload is about providing the N, and getting a constexpr fitted polynomial.
-        // The compile-time error search logic will be separate.
-        // This requires a new template parameter for the degree.
+    // Validate eps_val: cannot be less than machine precision for the output type
+    double validated_eps = eps_val;
+    if (validated_eps < std::numeric_limits<double>::epsilon()) {
+        if constexpr (std::is_floating_point_v<OutputType>) {
+            if (validated_eps < std::numeric_limits<OutputType>::epsilon()) {
+                 std::cerr << "Warning: Requested epsilon " << validated_eps
+                           << " is less than machine epsilon for OutputType ("
+                           << std::numeric_limits<OutputType>::epsilon() << "). Clamping.\n";
+                 validated_eps = std::numeric_limits<OutputType>::epsilon();
+            }
+        } else if constexpr (std::is_same_v<OutputType, std::complex<float>>) {
+             if (validated_eps < std::numeric_limits<float>::epsilon()) {
+                 std::cerr << "Warning: Requested epsilon " << validated_eps
+                           << " is less than machine epsilon for std::complex<float> ("
+                           << std::numeric_limits<float>::epsilon() << "). Clamping.\n";
+                 validated_eps = std::numeric_limits<float>::epsilon();
+            }
+        } else if constexpr (std::is_same_v<OutputType, std::complex<double>>) {
+             if (validated_eps < std::numeric_limits<double>::epsilon()) {
+                 std::cerr << "Warning: Requested epsilon " << validated_eps
+                           << " is less than machine epsilon for std::complex<double> ("
+                           << std::numeric_limits<double>::epsilon() << "). Clamping.\n";
+                 validated_eps = std::numeric_limits<double>::epsilon();
+            }
+        }
     }
-    // This is actually unreachable due to the `static_assert` above for now.
-    // This function signature and concept need to be re-evaluated.
-    // The current `make_func_eval` overload for C++20 that takes `eps_val`, `MaxN_val`
-    // already finds N at compile-time and then performs runtime fitting.
-    // The request is to make the *fitting itself* compile-time.
 
-    // Let's create a *new* specific API for *compile-time fitting for a fixed degree*.
+
+    // Start the recursive search from degree 1
+    return internal::find_optimal_constexpr_eval_impl<1, MaxN_val, NumEvalPoints_val, Iters_compile_time>(F, a, b, validated_eps);
 }
 
 template <std::size_t N_DEGREE, std::size_t Iters_compile_time = 1, class Func>
