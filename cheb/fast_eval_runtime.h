@@ -9,6 +9,25 @@
 
 namespace poly_eval {
 
+
+namespace detail {
+// Runtime version (for compatibility with std::vector based linspace in other APIs)
+template <typename T>
+std::vector<T> linspace(T start, T end, int num_points) {
+  std::vector<T> points(num_points);
+  if (num_points <= 1) {
+    if (num_points == 1)
+      points[0] = start;
+    return points;
+  }
+  T step = (end - start) / static_cast<T>(num_points - 1);
+  for (int i = 0; i < num_points; ++i) {
+    points[i] = start + static_cast<T>(i) * step;
+  }
+  return points;
+}
+}
+
 // -----------------------------------------------------------------------------
 // FuncEval Implementation (Runtime)
 // -----------------------------------------------------------------------------
@@ -38,6 +57,14 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType pt) con
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
+void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType *pts, OutputType *out,
+                                                                    int num_points) const noexcept {
+  for (int i = 0; i < num_points; ++i) {
+    out[i] = (*this)(pts[i]);
+  }
+}
+
+template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 const Buffer<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType, N_compile_time> &
 FuncEval<Func, N_compile_time, Iters_compile_time>::coeffs() const noexcept {
   return coeffs_;
@@ -63,16 +90,20 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_coeffs(Func 
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-template <class T> constexpr T FuncEval<Func, N_compile_time, Iters_compile_time>::map_to_domain(const T T_arg) const { return static_cast<T>(0.5 * (low * T_arg + hi)); }
+template <class T> constexpr T FuncEval<Func, N_compile_time, Iters_compile_time>::map_to_domain(const T T_arg) const {
+  return static_cast<T>(0.5 * (low * T_arg + hi));
+}
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-template <class T> constexpr T FuncEval<Func, N_compile_time, Iters_compile_time>::map_from_domain(const T T_arg) const {
+template <class T> constexpr T FuncEval<Func, N_compile_time,
+                                        Iters_compile_time>::map_from_domain(const T T_arg) const {
   return static_cast<T>((2.0 * T_arg - hi) / low);
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
-FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const Buffer<OutputType, N_compile_time> &c, InputType x) noexcept {
+FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const Buffer<OutputType, N_compile_time> &c,
+                                                           InputType x) noexcept {
   if (c.empty()) {
     return static_cast<OutputType>(0.0);
   }
@@ -86,7 +117,7 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const Buffer<OutputTy
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 std::vector<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType>
 FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(const std::vector<InputType> &x,
-                                                                 const std::vector<OutputType> &y) const {
+                                                                   const std::vector<OutputType> &y) const {
   int n = deg_;
   std::vector<OutputType> a = y;
   for (int k = 0; k < n - 1; ++k) {
@@ -100,7 +131,7 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(const std::ve
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 std::vector<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType>
 FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(const std::vector<OutputType> &alpha,
-                                                                      const std::vector<InputType> &nodes) {
+                                                                       const std::vector<InputType> &nodes) {
   int n = static_cast<int>(alpha.size());
   std::vector<OutputType> c(1, static_cast<OutputType>(0.0));
   for (int i = n - 1; i >= 0; --i) {
@@ -118,8 +149,9 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(const std
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-void FuncEval<Func, N_compile_time, Iters_compile_time>::refine_via_bjorck_pereyra(const std::vector<InputType> &x_cheb_,
-                                                                                 const std::vector<OutputType> &y_cheb_) {
+void FuncEval<Func, N_compile_time, Iters_compile_time>::refine_via_bjorck_pereyra(
+    const std::vector<InputType> &x_cheb_,
+    const std::vector<OutputType> &y_cheb_) {
   for (std::size_t pass = 0; pass < kItersCompileTime; ++pass) {
     std::vector<OutputType> r_cheb(deg_);
     for (int i = 0; i < deg_; ++i) {

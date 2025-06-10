@@ -8,6 +8,42 @@
 
 namespace poly_eval {
 
+namespace detail {
+// -----------------------------------------------------------------------------
+// Helper to generate linearly spaced points (can be constexpr in C++20)
+// -----------------------------------------------------------------------------
+template <typename T, std::size_t N>
+constexpr std::array<T, N> constexpr_linspace(T start, T end) {
+  std::array<T, N> points{}; // Value-initialize to zero
+  if (N == 0)
+    return points; // Empty array
+
+  if (N == 1) {
+    points[0] = start;
+    return points;
+  }
+  T step = (end - start) / static_cast<T>(N - 1);
+  for (std::size_t i = 0; i < N; ++i) {
+    points[i] = start + static_cast<T>(i) * step;
+  }
+  return points;
+}
+
+// -----------------------------------------------------------------------------
+// Constexpr Horner Step (used by ConstexprFuncEval)
+// -----------------------------------------------------------------------------
+template <std::size_t N_total, std::size_t current_idx, typename OutputType, typename InputType>
+static constexpr OutputType horner_forward_step(const std::array<OutputType, N_total> &c, InputType x) {
+  if constexpr (current_idx == N_total - 1) {
+    return c[current_idx];
+  } else {
+    return std::fma(horner_forward_step<N_total, current_idx + 1, OutputType, InputType>(c, x), x, c[current_idx]);
+  }
+}
+
+
+}
+
 // -----------------------------------------------------------------------------
 // ConstexprFuncEval Implementation (C++20)
 // -----------------------------------------------------------------------------
@@ -25,6 +61,14 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::operator()(InputType pt) const noexcep
 }
 
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
+constexpr void ConstexprFuncEval<Func, N_DEGREE, ITERS>::operator()(InputType *pts, OutputType *out,
+                                                                    int num_points) const noexcept {
+  for (int i = 0; i < num_points; ++i) {
+    out[i] = (*this)(pts[i]);
+  }
+}
+
+template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr const std::array<typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::OutputType, N_DEGREE> &
 ConstexprFuncEval<Func, N_DEGREE, ITERS>::coeffs() const noexcept {
   return coeffs_;
@@ -32,11 +76,15 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::coeffs() const noexcept {
 
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::InputType
-ConstexprFuncEval<Func, N_DEGREE, ITERS>::map_to_domain(const InputType T_arg) const { return 0.5 * (low * T_arg + hi); }
+ConstexprFuncEval<Func, N_DEGREE, ITERS>::map_to_domain(const InputType T_arg) const {
+  return 0.5 * (low * T_arg + hi);
+}
 
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::InputType
-ConstexprFuncEval<Func, N_DEGREE, ITERS>::map_from_domain(const InputType T_arg) const { return (2.0 * T_arg - hi) / low; }
+ConstexprFuncEval<Func, N_DEGREE, ITERS>::map_from_domain(const InputType T_arg) const {
+  return (2.0 * T_arg - hi) / low;
+}
 
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::OutputType
@@ -51,7 +99,7 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::horner(const std::array<OutputType, N_
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr std::array<typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::OutputType, N_DEGREE>
 ConstexprFuncEval<Func, N_DEGREE, ITERS>::bjorck_pereyra_constexpr(const std::array<InputType, N_DEGREE> &x,
-                                                                 const std::array<OutputType, N_DEGREE> &y) noexcept {
+                                                                   const std::array<OutputType, N_DEGREE> &y) noexcept {
   std::array<OutputType, N_DEGREE> a = y;
   for (std::size_t k = 0; k < N_DEGREE - 1; ++k) {
     for (std::size_t i = N_DEGREE - 1; i >= k + 1; --i) {
@@ -65,7 +113,8 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::bjorck_pereyra_constexpr(const std::ar
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr std::array<typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::OutputType, N_DEGREE>
 ConstexprFuncEval<Func, N_DEGREE, ITERS>::newton_to_monomial_constexpr(const std::array<OutputType, N_DEGREE> &alpha,
-                                                                      const std::array<InputType, N_DEGREE> &nodes) noexcept {
+                                                                       const std::array<InputType, N_DEGREE> &nodes)
+  noexcept {
   std::array<OutputType, N_DEGREE> c{};
 
   if (N_DEGREE > 0) {

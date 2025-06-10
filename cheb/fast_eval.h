@@ -74,6 +74,8 @@ public:
 
   OutputType operator()(InputType pt) const noexcept;
 
+  void operator()(InputType* pts, OutputType* out, int num_points) const noexcept;
+
   const Buffer<OutputType, N_compile_time> &coeffs() const noexcept;
 
 private:
@@ -83,8 +85,8 @@ private:
 
   void initialize_coeffs(Func F);
 
-  template <class T> constexpr T map_to_domain(const T T_arg) const;
-  template <class T> constexpr T map_from_domain(const T T_arg) const;
+  template <class T> constexpr T map_to_domain(T T_arg) const;
+  template <class T> constexpr T map_from_domain(T T_arg) const;
 
   static OutputType horner(const Buffer<OutputType, N_compile_time> &c, InputType x) noexcept;
 
@@ -114,53 +116,6 @@ auto make_func_eval(Func F, int n,
                     typename function_traits<Func>::arg0_type a,
                     typename function_traits<Func>::arg0_type b);
 
-// -----------------------------------------------------------------------------
-// Helper to generate linearly spaced points (can be constexpr in C++20)
-// -----------------------------------------------------------------------------
-template <typename T, std::size_t N>
-constexpr std::array<T, N> constexpr_linspace(T start, T end) {
-  std::array<T, N> points{}; // Value-initialize to zero
-  if (N == 0)
-    return points; // Empty array
-
-  if (N == 1) {
-    points[0] = start;
-    return points;
-  }
-  T step = (end - start) / static_cast<T>(N - 1);
-  for (std::size_t i = 0; i < N; ++i) {
-    points[i] = start + static_cast<T>(i) * step;
-  }
-  return points;
-}
-
-// Runtime version (for compatibility with std::vector based linspace in other APIs)
-template <typename T>
-std::vector<T> linspace(T start, T end, int num_points) {
-  std::vector<T> points(num_points);
-  if (num_points <= 1) {
-    if (num_points == 1)
-      points[0] = start;
-    return points;
-  }
-  T step = (end - start) / static_cast<T>(num_points - 1);
-  for (int i = 0; i < num_points; ++i) {
-    points[i] = start + static_cast<T>(i) * step;
-  }
-  return points;
-}
-
-// -----------------------------------------------------------------------------
-// Constexpr Horner Step (used by ConstexprFuncEval)
-// -----------------------------------------------------------------------------
-template <std::size_t N_total, std::size_t current_idx, typename OutputType, typename InputType>
-__always_inline static constexpr OutputType horner_forward_step(const std::array<OutputType, N_total> &c, InputType x) {
-  if constexpr (current_idx == N_total - 1) {
-    return c[current_idx];
-  } else {
-    return std::fma(horner_forward_step<N_total, current_idx + 1, OutputType, InputType>(c, x), x, c[current_idx]);
-  }
-}
 
 // -----------------------------------------------------------------------------
 // ConstexprFuncEval: A dedicated class for compile-time polynomial fitting.
@@ -178,14 +133,17 @@ public:
 
   constexpr OutputType operator()(InputType pt) const noexcept;
 
+  constexpr void operator()(InputType* pts, OutputType* out, int num_points) const noexcept;
+
   constexpr const std::array<OutputType, N_DEGREE> &coeffs() const noexcept;
+
 
 private:
   const InputType low, hi;
   std::array<OutputType, N_DEGREE> coeffs_;
 
-  constexpr InputType map_to_domain(const InputType T_arg) const;
-  constexpr InputType map_from_domain(const InputType T_arg) const;
+  constexpr InputType map_to_domain(InputType T_arg) const;
+  constexpr InputType map_from_domain(InputType T_arg) const;
 
   static constexpr OutputType horner(const std::array<OutputType, N_DEGREE> &c, InputType x) noexcept;
 
