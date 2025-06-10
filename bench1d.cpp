@@ -1,4 +1,6 @@
 #include "cheb1d.h"
+#include "fast_eval.h"
+
 #include <nanobench.h>
 #include <cmath>
 #include <iostream>

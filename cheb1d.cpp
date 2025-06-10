@@ -1,5 +1,6 @@
+#include "fast_eval.h"
+#include "cheb1d.h"
 
-#include <cheb1d.h>
 #include <iostream>
 #include <random>
 #include <iomanip>
@@ -53,6 +54,5 @@ int main() {
   std::cout << std::string(80, '-') << "\n\n\n";
   test<OptHor<decltype(f)>>(f);
   std::cout << std::string(80, '-') << "\n\n\n";
-  test<LSQ1D<decltype(f)>>(f);
+  test<poly_eval::FuncEval<decltype(f)>>(f);
 }
-

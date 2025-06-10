@@ -45,6 +45,9 @@ CPMAddPackage(
 )
 
 
+add_library(cheb INTERFACE)
+target_include_directories(cheb INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cheb)
+
 # ─────────────────────────────────────────────
 # Build executable
 add_executable(chebyshev_nd main.cpp)
@@ -67,3 +70,5 @@ target_compile_options(bench1d_1d PRIVATE -march=native)
 
 add_executable(chebgrid_1d cheb_grid_1d.cpp)
 target_compile_features(chebgrid_1d PRIVATE cxx_std_20)
+
+add_subdirectory(examples)
