@@ -68,7 +68,18 @@ target_include_directories(bench1d_1d PRIVATE cheb)
 target_link_libraries(bench1d_1d PRIVATE nanobench::nanobench xsimd)
 target_compile_options(bench1d_1d PRIVATE -march=native)
 
+
+add_executable(bench_many bench_many.cpp)
+target_compile_features(bench_many PRIVATE cxx_std_20)
+target_include_directories(bench_many PRIVATE cheb)
+target_link_libraries(bench_many PRIVATE nanobench::nanobench xsimd)
+target_compile_options(bench_many PRIVATE -march=native)
+
 add_executable(chebgrid_1d cheb_grid_1d.cpp)
 target_compile_features(chebgrid_1d PRIVATE cxx_std_20)
 
 add_subdirectory(examples)
+
+add_executable(bench_estrin bench_estrin.cpp)
+target_compile_features(bench_estrin PRIVATE cxx_std_20)
+target_compile_options(bench_estrin PRIVATE -march=native)

@@ -92,7 +92,7 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::horner(const std::array<OutputType, N_
   if constexpr (N_DEGREE == 0) {
     return static_cast<OutputType>(0.0);
   } else {
-    return horner_forward_step<N_DEGREE, 0, OutputType, InputType>(c, x);
+    return detail::horner_forward_step<N_DEGREE, 0, OutputType, InputType>(c, x);
   }
 }
 
@@ -103,7 +103,6 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::bjorck_pereyra_constexpr(const std::ar
   std::array<OutputType, N_DEGREE> a = y;
   for (std::size_t k = 0; k < N_DEGREE - 1; ++k) {
     for (std::size_t i = N_DEGREE - 1; i >= k + 1; --i) {
-      // In a real application, consider a compile-time error or a fallback for division by zero.
       a[i] = (a[i] - a[i - 1]) / static_cast<OutputType>(x[i] - x[i - k - 1]);
     }
   }
@@ -126,9 +125,7 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::newton_to_monomial_constexpr(const std
       c[j] = c[j - 1] - static_cast<OutputType>(nodes[i + 1]) * c[j];
     }
     c[0] = -static_cast<OutputType>(nodes[i + 1]) * c[0];
-    if (i >= 0) {
-      c[0] += alpha[i];
-    }
+    c[0] += alpha[i];
   }
   return c;
 }
@@ -302,7 +299,7 @@ constexpr auto make_constexpr_func_eval(Func F,
 }
 
 template <std::size_t N_DEGREE, std::size_t Iters_compile_time, class Func>
-constexpr auto make_constexpr_fixed_degree_eval(Func F,
+constexpr auto make_constexpr_func_eval(Func F,
                                                 typename function_traits<Func>::arg0_type a,
                                                 typename function_traits<Func>::arg0_type b) {
   static_assert(N_DEGREE > 0, "Degree must be positive for compile-time fitting.");

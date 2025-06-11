@@ -172,7 +172,7 @@ int main() {
   std::cout << "Full Compile-Time (double, Fixed N=" << CONSTEXPR_DEGREE
             << ", Iters=" << CONSTEXPR_ITERS << " - C++20+):\n";
   std::cout << "  Fitting time: 0.000000 ms (performed at compile-time)\n";
-  constexpr auto poly_constexpr_eval = poly_eval::make_constexpr_fixed_degree_eval<
+  constexpr auto poly_constexpr_eval = poly_eval::make_constexpr_func_eval<
       CONSTEXPR_DEGREE, CONSTEXPR_ITERS>(my_func_constexpr, domain_a6, domain_b6);
 
   // --- Compile-Time Evaluation (if the point is also constexpr) ---

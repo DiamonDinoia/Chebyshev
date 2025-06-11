@@ -189,7 +189,7 @@ constexpr auto make_constexpr_func_eval(Func F,
 // C++20 make_constexpr_fixed_degree_eval: Compile-time fitting for a fixed degree
 // -----------------------------------------------------------------------------
 template <std::size_t N_DEGREE, std::size_t Iters_compile_time = 1, class Func>
-constexpr auto make_constexpr_fixed_degree_eval(Func F,
+constexpr auto make_constexpr_func_eval(Func F,
                                                 typename function_traits<Func>::arg0_type a,
                                                 typename function_traits<Func>::arg0_type b);
 #endif // __cplusplus >= 202002L
