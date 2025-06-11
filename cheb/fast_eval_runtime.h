@@ -223,7 +223,7 @@ auto make_func_eval(Func F, double eps, // eps as a runtime parameter
     }
   }
 
-  std::vector<InputType> eval_points = poly_eval::detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
+  std::vector<InputType> eval_points = detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
 
   for (int n = 1; n <= static_cast<int>(MaxN_val); ++n) {
     FuncEval<Func, 0, Iters_compile_time> current_evaluator(F, n, a, b);

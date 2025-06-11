@@ -1,12 +1,10 @@
-#include "fast_eval.h" // Assuming your poly_eval.h is renamed to fast_eval.h
-
+#include "fast_eval.h"
 #include <iostream>
 #include <vector>
-#include <complex>
-#include <cmath>     // For std::cos, std::sin, std::abs, std::exp, std::sqrt, std::pow
-#include <iomanip>   // For std::scientific, std::setprecision, std::setw, std::left, std::right
-#include <random>    // For std::random_device, std::mt19937, std::uniform_real_distribution
-#include <limits>    // For std::numeric_limits
+#include <cmath>
+#include <iomanip>
+#include <random>
+#include <limits>
 
 
 // Helper function to perform and print error checks in a table format
@@ -26,7 +24,7 @@ void check_errors(TFunc original_func, TPoly poly_evaluator,
   const int INDEX_WIDTH = 5;
   // Increased width for points and values to accommodate complex numbers better
   const int POINT_WIDTH = 30;
-  const int VALUE_WIDTH = 35; // Significantly increased to fit complex<double> output
+  const int VALUE_WIDTH = 17;
   const int ERROR_WIDTH = 22;
 
   // Print table header
@@ -45,19 +43,14 @@ void check_errors(TFunc original_func, TPoly poly_evaluator,
   std::mt19937 gen(rd());
   std::uniform_real_distribution<TInput> dist(domain_a, Input_b);
 
-  for (int i = 0; i < 10; ++i) {
+  for (int i = 0; i < 5; ++i) {
     TInput random_point = dist(gen);
     TOutput actual_val = original_func(random_point);
     TOutput poly_val = poly_evaluator(random_point);
 
     // Calculate relative error using your specified formula: 1 - |P/A|
     // Note: This formula can yield negative results if |P/A| > 1.
-    double rel_err;
-    if (std::abs(actual_val) < std::numeric_limits<double>::epsilon()) { // Handle division by zero/very small numbers
-      rel_err = std::abs(poly_val) < std::numeric_limits<double>::epsilon() ? 0.0 : std::numeric_limits<double>::infinity();
-    } else {
-      rel_err = 1.0 - std::abs(poly_val / actual_val);
-    }
+    double rel_err = 1.0 - std::abs(poly_val / actual_val);
     // Print data row
     std::cout << std::setw(INDEX_WIDTH) << std::left << (i + 1);
     std::cout << std::setw(POINT_WIDTH) << std::left << random_point;
@@ -83,12 +76,6 @@ int main() {
       double c = 4.0 / (static_cast<double>(ns) * ns);
       // Ensure the argument to sqrt is non-negative
       double sqrt_arg = 1.0 - c * x * x;
-      if (sqrt_arg < 0) {
-        if (sqrt_arg < -1e-9) { // A small tolerance for floating point inaccuracies
-             return std::numeric_limits<double>::quiet_NaN();
-        }
-        sqrt_arg = 0.0; // Clamp to 0 if slightly negative
-      }
       return std::exp(beta * (std::sqrt(sqrt_arg) - 1.0));
     };
 
@@ -96,7 +83,8 @@ int main() {
     double domain_b = 1;
 
     // Set eps_runtime to 10^(-ns + 1)
-    double eps_runtime = std::pow(10.0, -static_cast<double>(ns) + 1.0);
+    double eps_runtime = std::max(std::pow(10.0, 1-static_cast<double>(ns)),
+                                  std::numeric_limits<double>::epsilon());
 
     constexpr size_t MAX_N = 32;
     constexpr size_t EVAL_POINTS = 100;
@@ -105,9 +93,9 @@ int main() {
     auto poly_evaluator = poly_eval::make_func_eval<MAX_N, EVAL_POINTS, ITERS>(
         target_func, eps_runtime, domain_a, domain_b);
 
-    std::cout << "\nError-Driven (double, RUNTIME Epsilon=" << std::scientific << std::setprecision(2) << eps_runtime
-              << ", MaxN=" << MAX_N << ", EvalPoints=" << EVAL_POINTS
-              << ", Iters=" << ITERS << "):\n";
+    std::cout << "\nError-Driven Epsilon=" << std::scientific << std::setprecision(2) << eps_runtime
+        << ", MaxN=" << MAX_N << ", EvalPoints=" << EVAL_POINTS
+        << ", Iters=" << ITERS << "):\n";
     std::cout << "  Actual degree found: " << poly_evaluator.coeffs().size() << std::endl;
     // Test at 0.0 (if in domain)
     if (domain_a <= 0.0 && 0.0 <= domain_b) {
