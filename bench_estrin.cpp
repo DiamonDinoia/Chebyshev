@@ -15,11 +15,7 @@
 // __always_inline is a GCC/Clang extension. For MSVC, use __forceinline.
 // For standard C++, rely on 'inline' or compiler's optimization capabilities.
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
+__always_inline
 constexpr T fma(T a, T b, T c) {
   return std::fma(a, b, c);
 }
@@ -27,11 +23,7 @@ constexpr T fma(T a, T b, T c) {
 // --- Compile-time Log2 function ---
 // Computes log2(N) at compile time. Used to determine powers of x for Estrin's scheme.
 template <std::size_t N>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
+__always_inline
 constexpr std::size_t ct_log2() {
   static_assert(N > 0, "ct_log2 of zero is undefined.");
   if constexpr (N == 1) {
@@ -45,11 +37,7 @@ constexpr std::size_t ct_log2() {
 // --- Helper to compute x^(2^k) at compile time for building the initial powers tuple ---
 // This function recursively calculates x^(2^K) values at compile time.
 template <typename T, std::size_t K>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
+__always_inline
 constexpr T compute_x_power_of_two(T x) {
   if constexpr (K == 0) {
     return x; // x^(2^0) = x^1
@@ -62,11 +50,7 @@ constexpr T compute_x_power_of_two(T x) {
 // --- Helper to create tuple of powers for Estrin's scheme ---
 // Uses std::index_sequence to generate a tuple of powers (x^1, x^2, x^4, x^8, ...)
 template <typename T, std::size_t... K>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
+__always_inline
 constexpr auto make_powers_tuple(T val, std::index_sequence<K...>) {
   return std::make_tuple(compute_x_power_of_two<T, K>(val)...);
 }
@@ -75,11 +59,7 @@ constexpr auto make_powers_tuple(T val, std::index_sequence<K...>) {
 // The core recursive function for Estrin's polynomial evaluation.
 // Uses if constexpr to unroll the recursion at compile time, leading to highly optimized code.
 template <typename T, typename PowersTuple, std::size_t Count>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
+__always_inline
 constexpr T estrin_eval_recursive(
     T x, PowersTuple powers_tuple, const T *coeffs) {
   if constexpr (Count == 0) {
@@ -107,11 +87,7 @@ constexpr T estrin_eval_recursive(
 // This is the entry point for Estrin's scheme.
 // It initializes the powers tuple and calls the recursive evaluation.
 template <typename T, std::size_t N_coeffs>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
+__always_inline
 constexpr T estrin_eval(T x, const T *coeffs) {
   static_assert(N_coeffs > 0, "At least one coefficient (c0) is required for a polynomial.");
 
@@ -136,189 +112,121 @@ constexpr T estrin_eval(T x, const T *coeffs) {
 // often found in highly optimized numerical libraries like SLEEF. They assume
 // powers of x (x, x2, x4, x8) are pre-computed.
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_0(T /*x*/, const T *coeffs) {
+__always_inline
+constexpr T sleef_0(T /*x*/, const T *coeffs) {
   // N_coeffs = 1 (degree 0)
   return coeffs[0];
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_1(T x, const T *coeffs) {
+__always_inline
+constexpr T sleef_1(T x, const T *coeffs) {
   // N_coeffs = 2 (degree 1)
   return fma(x, coeffs[1], coeffs[0]);
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_2(T x, T x2, const T *coeffs) {
+__always_inline
+constexpr T sleef_2(T x, T x2, const T *coeffs) {
   // N_coeffs = 3 (degree 2)
   return fma(x2, coeffs[2], fma(x, coeffs[1], coeffs[0]));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_3(T x, T x2, const T *coeffs) {
+__always_inline
+constexpr T sleef_3(T x, T x2, const T *coeffs) {
   // N_coeffs = 4 (degree 3)
   return fma(x2, fma(x, coeffs[3], coeffs[2]), fma(x, coeffs[1], coeffs[0]));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_4(T x, T x2, T x4, const T *coeffs) {
+__always_inline
+constexpr T sleef_4(T x, T x2, T x4, const T *coeffs) {
   // N_coeffs = 5 (degree 4)
-  return fma(x4, coeffs[4], sleef_poly_eval_3(x, x2, coeffs));
+  return fma(x4, coeffs[4], sleef_3(x, x2, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_5(T x, T x2, T x4, const T *coeffs) {
+__always_inline
+constexpr T sleef_5(T x, T x2, T x4, const T *coeffs) {
   // N_coeffs = 6 (degree 5)
-  return fma(x4, sleef_poly_eval_1(x, coeffs + 4), sleef_poly_eval_3(x, x2, coeffs));
+  return fma(x4, sleef_1(x, coeffs + 4), sleef_3(x, x2, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_6(T x, T x2, T x4, const T *coeffs) {
+__always_inline
+constexpr T sleef_6(T x, T x2, T x4, const T *coeffs) {
   // N_coeffs = 7 (degree 6)
-  return fma(x4, sleef_poly_eval_2(x, x2, coeffs + 4), sleef_poly_eval_3(x, x2, coeffs));
+  return fma(x4, sleef_2(x, x2, coeffs + 4), sleef_3(x, x2, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_7(T x, T x2, T x4, const T *coeffs) {
+__always_inline
+constexpr T sleef_7(T x, T x2, T x4, const T *coeffs) {
   // N_coeffs = 8 (degree 7)
-  return fma(x4, sleef_poly_eval_3(x, x2, coeffs + 4), sleef_poly_eval_3(x, x2, coeffs));
+  return fma(x4, sleef_3(x, x2, coeffs + 4), sleef_3(x, x2, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_8(T x, T x2, T x4, T x8, const T *coeffs) {
+__always_inline
+constexpr T sleef_8(T x, T x2, T x4, T x8, const T *coeffs) {
   // N_coeffs = 9 (degree 8)
-  return fma(x8, coeffs[8], sleef_poly_eval_7(x, x2, x4, coeffs));
+  return fma(x8, coeffs[8], sleef_7(x, x2, x4, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_9(T x, T x2, T x4, T x8, const T *coeffs) {
+__always_inline
+constexpr T sleef_9(T x, T x2, T x4, T x8, const T *coeffs) {
   // N_coeffs = 10 (degree 9)
-  return fma(x8, sleef_poly_eval_1(x, coeffs + 8), sleef_poly_eval_7(x, x2, x4, coeffs));
+  return fma(x8, sleef_1(x, coeffs + 8), sleef_7(x, x2, x4, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_10(T x, T x2, T x4, T x8, const T *coeffs) {
+__always_inline
+constexpr T sleef_10(T x, T x2, T x4, T x8, const T *coeffs) {
   // N_coeffs = 11 (degree 10)
-  return fma(x8, sleef_poly_eval_2(x, x2, coeffs + 8), sleef_poly_eval_7(x, x2, x4, coeffs));
+  return fma(x8, sleef_2(x, x2, coeffs + 8), sleef_7(x, x2, x4, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_11(T x, T x2, T x4, T x8, const T *coeffs) {
+__always_inline
+constexpr T sleef_11(T x, T x2, T x4, T x8, const T *coeffs) {
   // N_coeffs = 12 (degree 11)
-  return fma(x8, sleef_poly_eval_3(x, x2, coeffs + 8), sleef_poly_eval_7(x, x2, x4, coeffs));
+  return fma(x8, sleef_3(x, x2, coeffs + 8), sleef_7(x, x2, x4, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_12(T x, T x2, T x4, T x8, const T *coeffs) {
+__always_inline
+constexpr T sleef_12(T x, T x2, T x4, T x8, const T *coeffs) {
   // N_coeffs = 13 (degree 12)
-  return fma(x8, sleef_poly_eval_4(x, x2, x4, coeffs + 8), sleef_poly_eval_7(x, x2, x4, coeffs));
+  return fma(x8, sleef_4(x, x2, x4, coeffs + 8), sleef_7(x, x2, x4, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_13(T x, T x2, T x4, T x8, const T *coeffs) {
+__always_inline
+constexpr T sleef_13(T x, T x2, T x4, T x8, const T *coeffs) {
   // N_coeffs = 14 (degree 13)
-  return fma(x8, sleef_poly_eval_5(x, x2, x4, coeffs + 8), sleef_poly_eval_7(x, x2, x4, coeffs));
+  return fma(x8, sleef_5(x, x2, x4, coeffs + 8), sleef_7(x, x2, x4, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_14(T x, T x2, T x4, T x8, const T *coeffs) {
+__always_inline
+constexpr T sleef_14(T x, T x2, T x4, T x8, const T *coeffs) {
   // N_coeffs = 15 (degree 14)
-  return fma(x8, sleef_poly_eval_6(x, x2, x4, coeffs + 8), sleef_poly_eval_7(x, x2, x4, coeffs));
+  return fma(x8, sleef_6(x, x2, x4, coeffs + 8), sleef_7(x, x2, x4, coeffs));
 }
 
 template <typename T>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
-constexpr T sleef_poly_eval_15(T x, T x2, T x4, T x8, const T *coeffs) {
+__always_inline
+constexpr T sleef_15(T x, T x2, T x4, T x8, const T *coeffs) {
   // N_coeffs = 16 (degree 15)
-  return fma(x8, sleef_poly_eval_7(x, x2, x4, coeffs + 8), sleef_poly_eval_7(x, x2, x4, coeffs));
+  return fma(x8, sleef_7(x, x2, x4, coeffs + 8), sleef_7(x, x2, x4, coeffs));
 }
 
 // --- General Purpose Horner's Method (pointer and compile-time size version) ---
 // A standard and numerically stable method for polynomial evaluation.
 template <typename T, std::size_t N_coeffs>
-#ifdef __GNUC__
-__attribute__((always_inline))
-#elif _MSC_VER
-__forceinline
-#endif
+__always_inline
 constexpr T horner_eval(T x, const T *coeffs) {
   static_assert(N_coeffs > 0, "At least one coefficient is required for a polynomial.");
   T result = coeffs[N_coeffs - 1]; // Start with the highest degree coefficient
@@ -339,20 +247,12 @@ struct BenchmarkTimer {
 
   // __attribute_noinline__ prevents the compiler from inlining this function,
   // ensuring the timer overhead is measured consistently.
-  #ifdef __GNUC__
-  __attribute__((noinline))
-  #elif _MSC_VER
-  __declspec(noinline)
-  #endif
+  __attribute_noinline__
   BenchmarkTimer(const std::string &n) : name(n) {
     start_time = std::chrono::high_resolution_clock::now();
   }
 
-  #ifdef __GNUC__
-  __attribute__((noinline))
-  #elif _MSC_VER
-  __declspec(noinline)
-  #endif
+  __attribute_noinline__
   long long stop() {
     auto end_time = std::chrono::high_resolution_clock::now();
     return std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
@@ -364,7 +264,7 @@ struct DegreeBenchmarkResults {
   std::size_t degree;
   double estrin_ns_per_eval;
   double horner_ns_per_eval;
-  std::optional<double> sleef_poly_eval_ns_per_eval;
+  std::optional<double> sleef_ns_per_eval;
 };
 
 // Static template class to run and collect benchmarks for specified degrees.
@@ -392,8 +292,8 @@ private:
     // Skip if not enough coefficients are provided for this degree.
     // Assuming coeffs_ptr points to an array of MAX_COEFFS (33 for deg 32).
     if (num_coeffs > 33) {
-        std::cout << "Skipping Degree " << Degree << ": Not enough coefficients provided in the coeffs_array.\n";
-        return;
+      std::cout << "Skipping Degree " << Degree << ": Not enough coefficients provided in the coeffs_array.\n";
+      return;
     }
 
     DegreeBenchmarkResults current_degree_results;
@@ -450,49 +350,49 @@ private:
 
         // Use if constexpr to select the correct unrolled function at compile time.
         if constexpr (Degree == 0) {
-          sum_sleef_poly += sleef_poly_eval_0(x_local, coeffs_ptr);
+          sum_sleef_poly += sleef_0(x_local, coeffs_ptr);
         } else if constexpr (Degree == 1) {
-          sum_sleef_poly += sleef_poly_eval_1(x_local, coeffs_ptr);
+          sum_sleef_poly += sleef_1(x_local, coeffs_ptr);
         } else if constexpr (Degree == 2) {
-          sum_sleef_poly += sleef_poly_eval_2(x_local, x_power2, coeffs_ptr);
+          sum_sleef_poly += sleef_2(x_local, x_power2, coeffs_ptr);
         } else if constexpr (Degree == 3) {
-          sum_sleef_poly += sleef_poly_eval_3(x_local, x_power2, coeffs_ptr);
+          sum_sleef_poly += sleef_3(x_local, x_power2, coeffs_ptr);
         } else if constexpr (Degree == 4) {
-          sum_sleef_poly += sleef_poly_eval_4(x_local, x_power2, x_power4, coeffs_ptr);
+          sum_sleef_poly += sleef_4(x_local, x_power2, x_power4, coeffs_ptr);
         } else if constexpr (Degree == 5) {
-          sum_sleef_poly += sleef_poly_eval_5(x_local, x_power2, x_power4, coeffs_ptr);
+          sum_sleef_poly += sleef_5(x_local, x_power2, x_power4, coeffs_ptr);
         } else if constexpr (Degree == 6) {
-          sum_sleef_poly += sleef_poly_eval_6(x_local, x_power2, x_power4, coeffs_ptr);
+          sum_sleef_poly += sleef_6(x_local, x_power2, x_power4, coeffs_ptr);
         } else if constexpr (Degree == 7) {
-          sum_sleef_poly += sleef_poly_eval_7(x_local, x_power2, x_power4, coeffs_ptr);
+          sum_sleef_poly += sleef_7(x_local, x_power2, x_power4, coeffs_ptr);
         } else if constexpr (Degree == 8) {
-          sum_sleef_poly += sleef_poly_eval_8(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+          sum_sleef_poly += sleef_8(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         } else if constexpr (Degree == 9) {
-          sum_sleef_poly += sleef_poly_eval_9(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+          sum_sleef_poly += sleef_9(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         } else if constexpr (Degree == 10) {
-          sum_sleef_poly += sleef_poly_eval_10(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+          sum_sleef_poly += sleef_10(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         } else if constexpr (Degree == 11) {
-          sum_sleef_poly += sleef_poly_eval_11(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+          sum_sleef_poly += sleef_11(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         } else if constexpr (Degree == 12) {
-          sum_sleef_poly += sleef_poly_eval_12(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+          sum_sleef_poly += sleef_12(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         } else if constexpr (Degree == 13) {
-          sum_sleef_poly += sleef_poly_eval_13(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+          sum_sleef_poly += sleef_13(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         } else if constexpr (Degree == 14) {
-          sum_sleef_poly += sleef_poly_eval_14(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+          sum_sleef_poly += sleef_14(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         } else if constexpr (Degree == 15) {
-          sum_sleef_poly += sleef_poly_eval_15(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+          sum_sleef_poly += sleef_15(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         } else {
           sleef_poly_applicable = false; // Macro not defined for degrees > 15
         }
       }
       sleef_poly_total_ns = timer.stop();
       if (sleef_poly_applicable) {
-        current_degree_results.sleef_poly_eval_ns_per_eval = static_cast<double>(sleef_poly_total_ns) / num_iterations;
+        current_degree_results.sleef_ns_per_eval = static_cast<double>(sleef_poly_total_ns) / num_iterations;
         std::cout << "  Unrolled Estrin Perf Sum: " << sum_sleef_poly << "\n";
         std::cout << "  Unrolled Estrin: " << std::fixed << std::setprecision(2) << *current_degree_results.
-            sleef_poly_eval_ns_per_eval << " ns/eval\n";
+            sleef_ns_per_eval << " ns/eval\n";
       } else {
-        current_degree_results.sleef_poly_eval_ns_per_eval = std::nullopt;
+        current_degree_results.sleef_ns_per_eval = std::nullopt;
         std::cout << "  Unrolled Estrin Perf Sum: N/A (No specific unrolled macro for degree " << Degree << ")\n";
         std::cout << "  Unrolled Estrin: N/A\n";
       }
@@ -504,33 +404,19 @@ private:
     // Lambda for robust verification, handling near-zero expected values and NaNs/Infs.
     auto check_accuracy = [&](const std::string &name_suffix, double actual_val, double expected_val, double test_x) {
       // Save current precision setting
-      std::streamsize original_precision = std::cout.precision();
-
-      if (std::isnan(actual_val) || std::isinf(actual_val)) {
-          std::cout << "    SKIPPED: " << name_suffix << " (result for x=" << test_x << " is NaN/Inf).\n";
+      auto original_precision = std::cout.precision();
+      double error = std::abs(1 - actual_val / expected_val);
+      if (error <= (1e-15*Degree)) {
+        // std::cout << "    OK: " << name_suffix << " for x=" << test_x << " is very close.\n";
       } else {
-          // Define tolerances
-          const double abs_tolerance = 1e-14; // A small absolute tolerance for values near zero
-          const double rel_tolerance = 1e-12;  // A relative tolerance for larger values (adjust as needed for precision)
-
-          // Combined tolerance: max(absolute_tolerance, relative_tolerance * abs(expected))
-          // This handles cases where expected is small (uses abs_tolerance) or large (uses rel_tolerance)
-          double combined_tolerance = std::max(abs_tolerance, rel_tolerance * std::abs(expected_val));
-          double absolute_diff = std::abs(actual_val - expected_val);
-
-          if (absolute_diff <= combined_tolerance) {
-              std::cout << "    OK: " << name_suffix << " for x=" << test_x << " is very close.\n";
-          } else {
-              std::cout << "    FAILED: " << name_suffix << " for x=" << test_x << " mismatch.\n";
-              // Print full precision for debugging actual differences
-              std::cout << std::fixed << std::setprecision(20);
-              std::cout << "      Actual: " << actual_val << "\n";
-              std::cout << "      Expected: " << expected_val << "\n";
-              std::cout << "      Absolute diff: " << absolute_diff << "\n";
-              if (std::abs(expected_val) > 1e-300) { // Avoid division by zero for extremely small expected values
-                  std::cout << "      Relative diff: |1 - (Actual / Expected)| = " << std::abs(1 - actual_val / expected_val) << "\n";
-              }
-          }
+        std::cout << "    FAILED: " << name_suffix << " for x=" << test_x << " mismatch.\n";
+        // Print full precision for debugging actual differences
+        std::cout << std::fixed << std::setprecision(20);
+        std::cout << "      Actual: " << actual_val << "\n";
+        std::cout << "      Expected: " << expected_val << "\n";
+        // Avoid division by zero for extremely small expected values
+        std::cout << "      Relative diff: |1 - (Actual / Expected)| = " << std::abs(1 - actual_val / expected_val)
+            << "\n";
       }
       // Restore original precision setting
       std::cout << std::fixed << std::setprecision(original_precision);
@@ -540,46 +426,54 @@ private:
     const std::vector<double> accuracy_x_values = {-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0};
 
     for (double test_x : accuracy_x_values) {
-        double expected_result = 0.0;
-        for (std::size_t i = 0; i < num_coeffs; ++i) {
-            expected_result += coeffs_ptr[i] * std::pow(test_x, i);
+      double expected_result = 0.0;
+      for (std::size_t i = 0; i < num_coeffs; ++i) {
+        expected_result += coeffs_ptr[i] * std::pow(test_x, i);
+      }
+
+      // Test Estrin's accuracy
+      double estrin_actual = estrin_eval<double, num_coeffs>(test_x, coeffs_ptr);
+      check_accuracy("Estrin's", estrin_actual, expected_result, test_x);
+
+      // Test Horner's accuracy
+      double horner_actual = horner_eval<double, num_coeffs>(test_x, coeffs_ptr);
+      check_accuracy("Horner's (Ptr)", horner_actual, expected_result, test_x);
+
+      // Test Unrolled Estrin accuracy (if applicable)
+      if (sleef_poly_applicable) {
+        volatile double x_local = test_x;
+        volatile double x_power2 = x_local * x_local;
+        volatile double x_power4 = x_power2 * x_power2;
+        volatile double x_power8 = x_power4 * x_power4;
+        double sleef_poly_actual = 0.0;
+
+        if constexpr (Degree == 0) { sleef_poly_actual = sleef_0(x_local, coeffs_ptr); } else if constexpr (
+          Degree == 1) { sleef_poly_actual = sleef_1(x_local, coeffs_ptr); } else if constexpr (
+          Degree == 2) { sleef_poly_actual = sleef_2(x_local, x_power2, coeffs_ptr); } else if constexpr (
+          Degree == 3) { sleef_poly_actual = sleef_3(x_local, x_power2, coeffs_ptr); } else if constexpr (
+          Degree == 4) { sleef_poly_actual = sleef_4(x_local, x_power2, x_power4, coeffs_ptr); } else if constexpr (
+          Degree == 5) { sleef_poly_actual = sleef_5(x_local, x_power2, x_power4, coeffs_ptr); } else if constexpr (
+          Degree == 6) { sleef_poly_actual = sleef_6(x_local, x_power2, x_power4, coeffs_ptr); } else if constexpr (
+          Degree == 7) { sleef_poly_actual = sleef_7(x_local, x_power2, x_power4, coeffs_ptr); } else if constexpr (
+          Degree == 8) { sleef_poly_actual = sleef_8(x_local, x_power2, x_power4, x_power8, coeffs_ptr); } else if
+        constexpr (
+          Degree == 9) { sleef_poly_actual = sleef_9(x_local, x_power2, x_power4, x_power8, coeffs_ptr); } else if
+        constexpr (
+          Degree == 10) { sleef_poly_actual = sleef_10(x_local, x_power2, x_power4, x_power8, coeffs_ptr); } else if
+        constexpr (
+          Degree == 11) { sleef_poly_actual = sleef_11(x_local, x_power2, x_power4, x_power8, coeffs_ptr); } else if
+        constexpr (
+          Degree == 12) { sleef_poly_actual = sleef_12(x_local, x_power2, x_power4, x_power8, coeffs_ptr); } else if
+        constexpr (
+          Degree == 13) { sleef_poly_actual = sleef_13(x_local, x_power2, x_power4, x_power8, coeffs_ptr); } else if
+        constexpr (Degree == 14) {
+          sleef_poly_actual = sleef_14(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
+        } else if constexpr (Degree == 15) {
+          sleef_poly_actual = sleef_15(x_local, x_power2, x_power4, x_power8, coeffs_ptr);
         }
 
-        // Test Estrin's accuracy
-        double estrin_actual = estrin_eval<double, num_coeffs>(test_x, coeffs_ptr);
-        check_accuracy("Estrin's", estrin_actual, expected_result, test_x);
-
-        // Test Horner's accuracy
-        double horner_actual = horner_eval<double, num_coeffs>(test_x, coeffs_ptr);
-        check_accuracy("Horner's (Ptr)", horner_actual, expected_result, test_x);
-
-        // Test Unrolled Estrin accuracy (if applicable)
-        if (sleef_poly_applicable) {
-            volatile double x_local = test_x;
-            volatile double x_power2 = x_local * x_local;
-            volatile double x_power4 = x_power2 * x_power2;
-            volatile double x_power8 = x_power4 * x_power4;
-            double sleef_poly_actual = 0.0;
-
-            if constexpr (Degree == 0) { sleef_poly_actual = sleef_poly_eval_0(x_local, coeffs_ptr); }
-            else if constexpr (Degree == 1) { sleef_poly_actual = sleef_poly_eval_1(x_local, coeffs_ptr); }
-            else if constexpr (Degree == 2) { sleef_poly_actual = sleef_poly_eval_2(x_local, x_power2, coeffs_ptr); }
-            else if constexpr (Degree == 3) { sleef_poly_actual = sleef_poly_eval_3(x_local, x_power2, coeffs_ptr); }
-            else if constexpr (Degree == 4) { sleef_poly_actual = sleef_poly_eval_4(x_local, x_power2, x_power4, coeffs_ptr); }
-            else if constexpr (Degree == 5) { sleef_poly_actual = sleef_poly_eval_5(x_local, x_power2, x_power4, coeffs_ptr); }
-            else if constexpr (Degree == 6) { sleef_poly_actual = sleef_poly_eval_6(x_local, x_power2, x_power4, coeffs_ptr); }
-            else if constexpr (Degree == 7) { sleef_poly_actual = sleef_poly_eval_7(x_local, x_power2, x_power4, coeffs_ptr); }
-            else if constexpr (Degree == 8) { sleef_poly_actual = sleef_poly_eval_8(x_local, x_power2, x_power4, x_power8, coeffs_ptr); }
-            else if constexpr (Degree == 9) { sleef_poly_actual = sleef_poly_eval_9(x_local, x_power2, x_power4, x_power8, coeffs_ptr); }
-            else if constexpr (Degree == 10) { sleef_poly_actual = sleef_poly_eval_10(x_local, x_power2, x_power4, x_power8, coeffs_ptr); }
-            else if constexpr (Degree == 11) { sleef_poly_actual = sleef_poly_eval_11(x_local, x_power2, x_power4, x_power8, coeffs_ptr); }
-            else if constexpr (Degree == 12) { sleef_poly_actual = sleef_poly_eval_12(x_local, x_power2, x_power4, x_power8, coeffs_ptr); }
-            else if constexpr (Degree == 13) { sleef_poly_actual = sleef_poly_eval_13(x_local, x_power2, x_power4, x_power8, coeffs_ptr); }
-            else if constexpr (Degree == 14) { sleef_poly_actual = sleef_poly_eval_14(x_local, x_power2, x_power4, x_power8, coeffs_ptr); }
-            else if constexpr (Degree == 15) { sleef_poly_actual = sleef_poly_eval_15(x_local, x_power2, x_power4, x_power8, coeffs_ptr); }
-
-            check_accuracy("Unrolled Estrin", sleef_poly_actual, expected_result, test_x);
-        }
+        check_accuracy("Unrolled Estrin", sleef_poly_actual, expected_result, test_x);
+      }
     }
     std::cout << "-------------------------------------------\n";
 
@@ -605,8 +499,8 @@ private:
           << std::setw(15) << std::right << res.estrin_ns_per_eval
           << std::setw(15) << std::right << res.horner_ns_per_eval;
 
-      if (res.sleef_poly_eval_ns_per_eval.has_value()) {
-        std::cout << std::setw(18) << std::right << *res.sleef_poly_eval_ns_per_eval;
+      if (res.sleef_ns_per_eval.has_value()) {
+        std::cout << std::setw(18) << std::right << *res.sleef_ns_per_eval;
       } else {
         std::cout << std::setw(18) << std::right << "N/A";
       }
