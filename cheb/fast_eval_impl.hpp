@@ -40,7 +40,7 @@ std::vector<T> linspace(T start, T end, int num_points) {
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <std::size_t CurrentN, typename>
-FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, int n, InputType a, InputType b)
+C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, int n, InputType a, InputType b)
   : deg_(n), low(b - a), hi(b + a) {
   assert(deg_ > 0 && "Polynomial degree must be positive");
   coeffs_.resize(deg_);
@@ -49,7 +49,7 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, int n, Inpu
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <std::size_t CurrentN, typename>
-FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, InputType a, InputType b)
+C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, InputType a, InputType b)
   : deg_(static_cast<int>(CurrentN)), low(b - a), hi(b + a) {
   assert(deg_ > 0 && "Polynomial degree must be positive (template N > 0)");
   initialize_coeffs(F);
@@ -58,7 +58,7 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, InputType a
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 FAST_MATH_BEGIN
 typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
-FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType pt) const noexcept {
+C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType pt) const noexcept {
   const auto xi = map_from_domain(pt);
   return horner(coeffs_.data(), coeffs_.size(), xi); // Pass data pointer and size
 }
@@ -170,13 +170,14 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType *p
 FAST_MATH_END
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
+C20CONSTEXPR
 const Buffer<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType, N_compile_time> &
 FuncEval<Func, N_compile_time, Iters_compile_time>::coeffs() const noexcept {
   return coeffs_;
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_coeffs(Func F) {
+C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_coeffs(Func F) {
   std::vector<InputType> x_cheb_;
   std::vector<OutputType> y_cheb_;
   x_cheb_.resize(deg_);
@@ -205,32 +206,50 @@ template <class T> constexpr T FuncEval<Func, N_compile_time,
   return static_cast<T>((2.0 * T_arg - hi) / low);
 }
 
+
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
+template <std::size_t N_total, std::size_t current_idx>
 typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
-FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const OutputType *c_ptr, std::size_t c_size,
-                                                           InputType x) noexcept {
-  if (c_size == 0) {
-    return static_cast<OutputType>(0.0);
-  }
-  OutputType acc = c_ptr[c_size - 1]; // Start with the highest degree coefficient
-  for (int k = static_cast<int>(c_size) - 2; k >= 0; --k) {
+constexpr FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const OutputType *c_ptr, InputType x) noexcept {
+  if constexpr (current_idx == N_total - 1) {
+    return c_ptr[current_idx];
+  } else {
     if constexpr (std::is_same_v<InputType, OutputType> && std::is_floating_point_v<InputType>) {
-      acc = xsimd::fma(x, acc, c_ptr[k]);
+      return std::fma(horner<N_total, current_idx + 1>(c_ptr, x), x,
+                      c_ptr[current_idx]);
     } else {
-      acc = acc * x + c_ptr[k];
+      return horner<N_total, current_idx + 1>(c_ptr, x) * x + c_ptr[current_idx];
     }
   }
-  return acc;
+}
+
+template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
+typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
+C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const OutputType *c_ptr, std::size_t c_size,
+                                                                        InputType x) noexcept {
+  if constexpr (N_compile_time != 0) {
+    return horner<N_compile_time, 0>(c_ptr, x); // Use compile-time N
+  } else {
+    OutputType acc = c_ptr[c_size - 1]; // Start with the highest degree coefficient
+    for (int k = static_cast<int>(c_size) - 2; k >= 0; --k) {
+      if constexpr (std::is_same_v<InputType, OutputType> && std::is_floating_point_v<InputType>) {
+        acc = xsimd::fma(x, acc, c_ptr[k]);
+      } else {
+        acc = acc * x + c_ptr[k];
+      }
+    }
+    return acc;
+  }
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 std::vector<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType>
-FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(const std::vector<InputType> &x,
-                                                                   const std::vector<OutputType> &y) const {
-  int n = deg_;
+C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(const std::vector<InputType> &x,
+  const std::vector<OutputType> &y) {
+  const auto n = static_cast<int>(x.size());
   std::vector<OutputType> a = y;
-  for (int k = 0; k < n - 1; ++k) {
-    for (int i = n - 1; i >= k + 1; --i) {
+  for (std::size_t k = 0; k < n - 1; ++k) {
+    for (std::size_t i = n - 1; i >= k + 1; --i) {
       a[i] = (a[i] - a[i - 1]) / static_cast<OutputType>(x[i] - x[i - k - 1]);
     }
   }
@@ -239,8 +258,9 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(const std::ve
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 std::vector<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType>
-FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(const std::vector<OutputType> &alpha,
-                                                                       const std::vector<InputType> &nodes) {
+C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(
+    const std::vector<OutputType> &alpha,
+    const std::vector<InputType> &nodes) {
   int n = static_cast<int>(alpha.size());
   std::vector<OutputType> c(1, static_cast<OutputType>(0.0));
   for (int i = n - 1; i >= 0; --i) {
@@ -258,7 +278,7 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(const std
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-void FuncEval<Func, N_compile_time, Iters_compile_time>::refine_via_bjorck_pereyra(
+C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::refine_via_bjorck_pereyra(
     const std::vector<InputType> &x_cheb_,
     const std::vector<OutputType> &y_cheb_) {
   for (std::size_t pass = 0; pass < kItersCompileTime; ++pass) {
@@ -282,24 +302,24 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::refine_via_bjorck_perey
 // -----------------------------------------------------------------------------
 
 template <std::size_t N_compile_time, std::size_t Iters_compile_time, class Func>
-auto make_func_eval(Func F,
-                    typename function_traits<Func>::arg0_type a,
-                    typename function_traits<Func>::arg0_type b) {
+C20CONSTEXPR auto make_func_eval(Func F,
+                                 typename function_traits<Func>::arg0_type a,
+                                 typename function_traits<Func>::arg0_type b) {
   return FuncEval<Func, N_compile_time, Iters_compile_time>(F, a, b);
 }
 
 template <std::size_t Iters_compile_time, class Func>
-auto make_func_eval(Func F, int n,
-                    typename function_traits<Func>::arg0_type a,
-                    typename function_traits<Func>::arg0_type b) {
+C20CONSTEXPR auto make_func_eval(Func F, int n,
+                                 typename function_traits<Func>::arg0_type a,
+                                 typename function_traits<Func>::arg0_type b) {
   return FuncEval<Func, 0, Iters_compile_time>(F, n, a, b);
 }
 
 // C++17 compatible API for finding minimum N for a given error tolerance (runtime eps)
 template <std::size_t MaxN_val, std::size_t NumEvalPoints_val, std::size_t Iters_compile_time, class Func>
-auto make_func_eval(Func F, double eps, // eps as a runtime parameter
-                    typename function_traits<Func>::arg0_type a,
-                    typename function_traits<Func>::arg0_type b) {
+C20CONSTEXPR auto make_func_eval(Func F, double eps, // eps as a runtime parameter
+                                 typename function_traits<Func>::arg0_type a,
+                                 typename function_traits<Func>::arg0_type b) {
   using InputType = typename function_traits<Func>::arg0_type;
   using OutputType = typename function_traits<Func>::result_type;
 
@@ -356,5 +376,47 @@ auto make_func_eval(Func F, double eps, // eps as a runtime parameter
       << " within MaxN = " << MaxN_val << ". Returning FuncEval with degree " << MaxN_val << ".\n";
   return FuncEval<Func, 0, Iters_compile_time>(F, static_cast<int>(MaxN_val), a, b);
 }
+
+#if __cplusplus >= 202002L
+template <double eps_val, std::size_t MaxN_val, std::size_t NumEvalPoints_val, std::size_t Iters_compile_time, class
+          Func>
+constexpr auto make_func_eval(Func F,
+                              typename function_traits<Func>::arg0_type a,
+                              typename function_traits<Func>::arg0_type b) {
+  using InputType = typename function_traits<Func>::arg0_type;
+  using OutputType = typename function_traits<Func>::result_type;
+
+  static_assert(MaxN_val > 0, "Max polynomial degree must be positive.");
+  static_assert(NumEvalPoints_val > 1, "Number of evaluation points must be greater than 1.");
+
+  std::vector<InputType> eval_points = detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
+
+  for (int n = 1; n <= static_cast<int>(MaxN_val); ++n) {
+    FuncEval<Func, 0, Iters_compile_time> current_evaluator(F, n, a, b);
+    double max_observed_error = 0.0;
+
+    for (const auto &pt : eval_points) {
+      OutputType actual_val = F(pt);
+      OutputType poly_val = current_evaluator(pt);
+      double current_abs_error = std::abs(1.0 - std::abs(poly_val / actual_val));
+      if (current_abs_error > max_observed_error) {
+        max_observed_error = current_abs_error;
+      }
+    }
+
+    if (max_observed_error <= eps_val) {
+      std::cout << "Converged: Found min degree N = " << n
+          << " (Max Error: " << std::scientific << std::setprecision(4) << max_observed_error
+          << " <= Epsilon: " << eps_val << ")\n";
+      return current_evaluator;
+    }
+  }
+
+  std::cout << "Warning: Did not converge to epsilon " << std::scientific << std::setprecision(4) << eps_val
+      << " within MaxN = " << MaxN_val << ". Returning FuncEval with degree " << MaxN_val << ".\n";
+  return FuncEval<Func, 0, Iters_compile_time>(F, static_cast<int>(MaxN_val), a, b);
+}
+#endif
+
 
 } // namespace poly_eval

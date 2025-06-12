@@ -1,4 +1,4 @@
-#include "fast_eval.h"
+#include "fast_eval.hpp"
 #include <nanobench.h>
 #include <cmath>
 #include <iostream>
@@ -39,7 +39,7 @@ int main() {
 
   // Now, declare objects that depend on the above constexprs
   const auto evaluator = poly_eval::make_func_eval(f, degree, a, b);
-  constexpr auto fixed_evaluator = poly_eval::make_constexpr_func_eval<degree>(f, a, b);
+  constexpr auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
 
   // Other non-constexpr declarations that depend on previously defined constexprs
   std::uniform_real_distribution<double> dist{a, b}; // Depends on 'a' and 'b'

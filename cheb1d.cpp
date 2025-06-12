@@ -1,4 +1,4 @@
-#include "fast_eval.h"
+#include "fast_eval.hpp"
 #include "cheb1d.h"
 
 #include <iostream>

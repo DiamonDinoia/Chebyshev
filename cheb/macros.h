@@ -36,3 +36,10 @@
     #define FAST_MATH_BEGIN
     #define FAST_MATH_END
 #endif
+
+// Define a c++20 cconstexpr macro
+#if __cplusplus >= 202002L
+    #define C20CONSTEXPR constexpr
+#else
+#define C20CONSTEXPR
+#endif
