@@ -80,11 +80,11 @@ public:
   C20CONSTEXPR const Buffer<OutputType, N_compile_time> &coeffs() const noexcept;
 
 private:
-  int deg_;
+  const int n_terms;
   const InputType low, hi;
-  Buffer<OutputType, N_compile_time> coeffs_;
+  Buffer<OutputType, N_compile_time> monomials;
 
-  C20CONSTEXPR void initialize_coeffs(Func F);
+  C20CONSTEXPR void initialize_monomials(Func F);
 
   template <class T> ALWAYS_INLINE constexpr T map_to_domain(T T_arg) const;
   template <class T> ALWAYS_INLINE constexpr T map_from_domain(T T_arg) const;

@@ -8,10 +8,6 @@
 #include <iostream>
 #include <xsimd/xsimd.hpp>
 
-
-// No need to include "poly_eval.hpp" here, as it's included by poly_eval.hpp
-// This file is meant to be included *by* poly_eval.hpp
-
 namespace poly_eval {
 
 
@@ -41,18 +37,18 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 template <std::size_t CurrentN, typename>
 C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(
     Func F, const int n, const InputType a, const InputType b)
-  : deg_(n), low(b - a), hi(b + a) {
-  assert(deg_ > 0 && "Polynomial degree must be positive");
-  coeffs_.resize(deg_);
-  initialize_coeffs(F);
+  : n_terms(n), low(b - a), hi(b + a) {
+  assert(n_terms > 0 && "Polynomial degree must be positive");
+  monomials.resize(n_terms);
+  initialize_monomials(F);
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <std::size_t CurrentN, typename>
 C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, const InputType a, const InputType b)
-  : deg_(static_cast<int>(CurrentN)), low(b - a), hi(b + a) {
-  assert(deg_ > 0 && "Polynomial degree must be positive (template N > 0)");
-  initialize_coeffs(F);
+  : n_terms(static_cast<int>(CurrentN)), low(b - a), hi(b + a) {
+  assert(n_terms > 0 && "Polynomial degree must be positive (template N > 0)");
+  initialize_monomials(F);
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
@@ -60,7 +56,7 @@ FAST_MATH_BEGIN
 typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
 C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType pt) const noexcept {
   const auto xi = map_from_domain(pt);
-  return horner(coeffs_.data(), coeffs_.size(), xi); // Pass data pointer and size
+  return horner(monomials.data(), monomials.size(), xi); // Pass data pointer and size
 }
 
 FAST_MATH_END
@@ -73,7 +69,7 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner(
     VecInputType * RESTRICT pt_batches,
     VecOutputType *RESTRICT acc_batches) const noexcept {
   // Array of accumulator batches
-  // No coeffs_ptr needed; 'this->coeffs_' is accessible
+  // No monomialsptr needed; 'this->monomials' is accessible
 
   // Base case for the recursion: if K_Current is less than K_Target, stop.
   if constexpr (K_Current >= K_Target) {
@@ -82,9 +78,9 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner(
     // for each batch within the current unroll factor.
     [&]<std::size_t... J>(std::integer_sequence<std::size_t, J...>) {
       ((
-        // Apply Horner's method: acc = pt * acc + coeffs_[K_Current]
-        // coeffs_ is now accessed implicitly via the 'this' pointer
-        acc_batches[J] = xsimd::fma(pt_batches[J], acc_batches[J], xsimd::batch<OutputType>(coeffs_[K_Current]))
+        // Apply Horner's method: acc = pt * acc + monomials[K_Current]
+        // monomials is now accessed implicitly via the 'this' pointer
+        acc_batches[J] = xsimd::fma(pt_batches[J], acc_batches[J], xsimd::batch<OutputType>(monomials[K_Current]))
       ), ...); // Fold expression applies the operation for each J in the sequence
     }(std::make_integer_sequence<std::size_t, OuterUnrollFactor>{});
 
@@ -102,8 +98,8 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_po
     const InputType * RESTRICT pts, OutputType * RESTRICT out, std::size_t num_points) const noexcept {
 
   const auto simd_size = xsimd::batch<InputType>::size;
-  const auto *coeffs_ptr = coeffs_.data();
-  const auto coeffs_size = coeffs_.size();
+  const auto *monomialsptr = monomials.data();
+  const auto monomialssize = monomials.size();
   const auto trunc_size = num_points & (-simd_size * OuterUnrollFactor);
 
   constexpr auto pts_aligment = [] {
@@ -131,18 +127,18 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_po
       // Ensure we don't read past num_points for partial blocks
       pt_batches[j] = map_from_domain(xsimd::load(pts + i + j * simd_size, pts_aligment));
       // Initialize with the last coefficient
-      acc_batches[j] = xsimd::batch<OutputType>(coeffs_ptr[coeffs_size - 1]);
+      acc_batches[j] = xsimd::batch<OutputType>(monomialsptr[monomialssize - 1]);
     });
 
     // Process each batch in the inner loop (Horner's method)
-    // Iterating from coeffs_size - 2 down to 0
+    // Iterating from monomialssize - 2 down to 0
     if constexpr (N_compile_time > 0) {
       horner<static_cast<int>(N_compile_time - 1), 0, OuterUnrollFactor>(pt_batches, acc_batches);
     } else {
-      for (int k = coeffs_size - 2; k >= 0; --k) {
+      for (int k = monomialssize - 2; k >= 0; --k) {
         detail::unroll_loop<OuterUnrollFactor>([&](const auto j) {
-          // acc_batches[j] = pt_batches[j] * acc_batches[j] + coeffs_ptr[k]
-          acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(coeffs_ptr[k]));
+          // acc_batches[j] = pt_batches[j] * acc_batches[j] + monomialsptr[k]
+          acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(monomialsptr[k]));
         });
       }
     }
@@ -180,8 +176,8 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputT
   // find out the alignment of pts and out
   constexpr auto simd_size = xsimd::batch<InputType>::size;
   constexpr auto alignment = xsimd::best_arch::alignment();
-  const auto coeffs_ptr = coeffs_.data();
-  const auto coeffs_size = coeffs_.size();
+  const auto monomialsptr = monomials.data();
+  const auto monomialssize = monomials.size();
 
   constexpr auto unroll_factor = 4;
 
@@ -219,25 +215,25 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 C20CONSTEXPR
 const Buffer<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType, N_compile_time> &
 FuncEval<Func, N_compile_time, Iters_compile_time>::coeffs() const noexcept {
-  return coeffs_;
+  return monomials;
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_coeffs(Func F) {
+C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_monomials(Func F) {
   std::vector<InputType> x_cheb_;
   std::vector<OutputType> y_cheb_;
-  x_cheb_.resize(deg_);
-  for (int k = 0; k < deg_; ++k) {
-    x_cheb_[k] = static_cast<InputType>(std::cos((2.0 * k + 1.0) * M_PI / (2.0 * deg_)));
+  x_cheb_.resize(n_terms);
+  for (int k = 0; k < n_terms; ++k) {
+    x_cheb_[k] = static_cast<InputType>(detail::cos((2.0 * k + 1.0) * M_PI / (2.0 * n_terms)));
   }
-  y_cheb_.resize(deg_);
-  for (int i = 0; i < deg_; ++i) {
+  y_cheb_.resize(n_terms);
+  for (int i = 0; i < n_terms; ++i) {
     y_cheb_[i] = F(map_to_domain(x_cheb_[i]));
   }
   const auto newton = bjorck_pereyra(x_cheb_, y_cheb_);
-  const auto monomials = newton_to_monomial(newton, x_cheb_);
-  assert(temp_monomial_coeffs.size() == coeffs_.size() && "Monomial coefficients size mismatch after conversion!");
-  std::copy(monomials.begin(), monomials.end(), coeffs_.begin());
+  const auto temp_monomials = newton_to_monomial(newton, x_cheb_);
+  assert(temp_monomials.size() == monomials.size() && "Monomial coefficients size mismatch after conversion!");
+  std::copy(temp_monomials.begin(), temp_monomials.end(), monomials.begin());
   refine(x_cheb_, y_cheb_);
 }
 
@@ -340,17 +336,17 @@ C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::refine(
     const std::vector<InputType> &x_cheb_,
     const std::vector<OutputType> &y_cheb_) {
   for (std::size_t pass = 0; pass < kItersCompileTime; ++pass) {
-    std::vector<OutputType> r_cheb(deg_);
-    for (int i = 0; i < deg_; ++i) {
+    std::vector<OutputType> r_cheb(n_terms);
+    for (int i = 0; i < n_terms; ++i) {
       InputType xi = x_cheb_[i];
-      OutputType p_val = horner(this->coeffs_.data(), this->coeffs_.size(), xi); // Pass data pointer and size
+      OutputType p_val = horner(this->monomials.data(), this->monomials.size(), xi); // Pass data pointer and size
       r_cheb[i] = y_cheb_[i] - p_val;
     }
     std::vector<OutputType> newton_r = bjorck_pereyra(x_cheb_, r_cheb);
     std::vector<OutputType> mono_r = newton_to_monomial(newton_r, x_cheb_);
-    assert(mono_r.size() == coeffs_.size() && "Refinement coefficients size mismatch!");
-    for (int j = 0; j < deg_; ++j) {
-      coeffs_[j] += mono_r[j];
+    assert(mono_r.size() == monomials.size() && "Refinement coefficients size mismatch!");
+    for (int j = 0; j < n_terms; ++j) {
+      monomials[j] += mono_r[j];
     }
   }
 }

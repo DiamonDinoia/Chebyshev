@@ -81,8 +81,8 @@ int main() {
   constexpr size_t MAX_N_DOUBLE_C17 = 64; // Max degree to search (compile-time)
   constexpr size_t EVAL_POINTS_DOUBLE_C17 = 100; // Number of evaluation points (compile-time)
 
-  double domain_a1 = -.1;
-  double domain_b1 = .1;
+  double domain_a1 = -.4;
+  double domain_b1 = .3;
   auto poly_runtime_d_eps = poly_eval::make_func_eval<MAX_N_DOUBLE_C17, EVAL_POINTS_DOUBLE_C17>(
       my_func_double, eps_double_runtime, domain_a1, domain_b1);
   std::cout << "\nError-Driven (double, RUNTIME Epsilon=" << std::scientific << std::setprecision(2) <<
@@ -103,8 +103,8 @@ int main() {
   constexpr size_t EVAL_POINTS_FLOAT_C17 = 100; // Compile-time
   constexpr size_t ITERS_FLOAT_C17 = 3; // Compile-time refinement iterations
 
-  float domain_a2 = -static_cast<float>(M_PI / 2.0);
-  float domain_b2 = static_cast<float>(M_PI / 2.0);
+  float domain_a2 = -static_cast<float>(0);
+  float domain_b2 = static_cast<float>(1);
   auto poly_runtime_f_eps = poly_eval::make_func_eval<MAX_N_FLOAT_C17, EVAL_POINTS_FLOAT_C17, ITERS_FLOAT_C17>(
       my_func_float, eps_float_runtime, domain_a2, domain_b2);
   std::cout << "\nError-Driven (float, RUNTIME Epsilon=" << std::scientific << std::setprecision(2) << eps_float_runtime
