@@ -65,10 +65,36 @@ C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(Inpu
 FAST_MATH_END
 
 
+template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
+template <int K_Current, int K_Target, int OuterUnrollFactor, class VecInputType, class VecOutputType>
+__always_inline void FuncEval<Func, N_compile_time, Iters_compile_time>::horner(
+    VecInputType *pt_batches,
+    VecOutputType *acc_batches) const noexcept {
+  // Array of accumulator batches
+  // No coeffs_ptr needed; 'this->coeffs_' is accessible
+
+  // Base case for the recursion: if K_Current is less than K_Target, stop.
+  if constexpr (K_Current >= K_Target) {
+    // Inner loop unrolling for 'j' (OuterUnrollFactor)
+    // This uses a C++17 generic lambda with a fold expression to unroll the inner loop
+    // for each batch within the current unroll factor.
+    [&]<std::size_t... J>(std::integer_sequence<std::size_t, J...>) {
+      ((
+        // Apply Horner's method: acc = pt * acc + coeffs_[K_Current]
+        // coeffs_ is now accessed implicitly via the 'this' pointer
+        acc_batches[J] = xsimd::fma(pt_batches[J], acc_batches[J], xsimd::batch<OutputType>(this->coeffs_[K_Current]))
+      ), ...); // Fold expression applies the operation for each J in the sequence
+    }(std::make_integer_sequence<std::size_t, OuterUnrollFactor>{});
+
+    // Recursive call to process the next coefficient (k-1)
+    horner<K_Current - 1, K_Target, OuterUnrollFactor>(pt_batches, acc_batches);
+  }
+}
+
 // Batch evaluation implementation using SIMD and unrolling
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-__always_inline void FuncEval<Func, N_compile_time, Iters_compile_time>::process_polynomial_horner(
+__always_inline void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_polyeval(
     InputType *pts, OutputType *out, std::size_t num_points) const noexcept {
 
   const int simd_size = xsimd::batch<InputType>::size;
@@ -105,10 +131,14 @@ __always_inline void FuncEval<Func, N_compile_time, Iters_compile_time>::process
 
     // Process each batch in the inner loop (Horner's method)
     // Iterating from coeffs_size - 2 down to 0
-    for (int k = coeffs_size - 2; k >= 0; --k) {
-      for (int j = 0; j < OuterUnrollFactor; ++j) {
-        // acc_batches[j] = pt_batches[j] * acc_batches[j] + coeffs_ptr[k]
-        acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(coeffs_ptr[k]));
+    if constexpr (N_compile_time > 0) {
+      horner<static_cast<int>(N_compile_time - 1), 0, OuterUnrollFactor>(pt_batches, acc_batches);
+    } else {
+      for (int k = coeffs_size - 2; k >= 0; --k) {
+        for (int j = 0; j < OuterUnrollFactor; ++j) {
+          // acc_batches[j] = pt_batches[j] * acc_batches[j] + coeffs_ptr[k]
+          acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(coeffs_ptr[k]));
+        }
       }
     }
 
@@ -123,6 +153,14 @@ __always_inline void FuncEval<Func, N_compile_time, Iters_compile_time>::process
   }
 }
 
+
+// Batch evaluation implementation using SIMD and unrolling
+template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
+template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
+__attribute_noinline__ void FuncEval<Func, N_compile_time, Iters_compile_time>::no_inline_horner_polyeval(
+    InputType *pts, OutputType *out, std::size_t num_points) const noexcept {
+  return horner_polyeval<OuterUnrollFactor, pts_aligned, out_aligned>(pts, out, num_points);
+}
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <bool pts_aligned, bool out_aligned>
@@ -139,9 +177,9 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType *p
 
   if constexpr (pts_aligned) {
     if constexpr (out_aligned) {
-      return process_polynomial_horner<unroll_factor, true, true>(pts, out, num_points);
+      return horner_polyeval<unroll_factor, true, true>(pts, out, num_points);
     } else {
-      return process_polynomial_horner<unroll_factor, true, false>(pts, out, num_points);
+      return horner_polyeval<unroll_factor, true, false>(pts, out, num_points);
     }
   } else {
     const auto pts_alignment = detail::get_alignment(pts);
@@ -149,12 +187,12 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType *p
 
     if (pts_alignment != out_alignment) {
       if (pts_alignment >= alignment) {
-        return process_polynomial_horner<unroll_factor, true, false>(pts, out, num_points);
+        return no_inline_horner_polyeval<unroll_factor, true, false>(pts, out, num_points);
       }
       if (out_alignment >= alignment) {
-        return process_polynomial_horner<unroll_factor, false, true>(pts, out, num_points);
+        return no_inline_horner_polyeval<unroll_factor, false, true>(pts, out, num_points);
       }
-      return process_polynomial_horner<unroll_factor, false, false>(pts, out, num_points);
+      return no_inline_horner_polyeval<unroll_factor, false, false>(pts, out, num_points);
     }
 
     // process scalar until we reach the first aligned point
@@ -162,7 +200,7 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType *p
     for (i = 0; i < num_points & (alignment - 1); ++i) {
       out[i] = operator()(pts[i]);
     }
-    return process_polynomial_horner<unroll_factor, true, true>(pts + i, out + i, num_points - i);
+    return horner_polyeval<unroll_factor, true, true>(pts + i, out + i, num_points - i);
   }
 }
 
@@ -187,11 +225,11 @@ C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize
   for (int i = 0; i < deg_; ++i) {
     y_cheb_[i] = F(map_to_domain(x_cheb_[i]));
   }
-  std::vector<OutputType> newton = bjorck_pereyra(x_cheb_, y_cheb_);
-  std::vector<OutputType> temp_monomial_coeffs = newton_to_monomial(newton, x_cheb_);
+  const auto newton = bjorck_pereyra(x_cheb_, y_cheb_);
+  const auto monomials = newton_to_monomial(newton, x_cheb_);
   assert(temp_monomial_coeffs.size() == coeffs_.size() && "Monomial coefficients size mismatch after conversion!");
-  std::copy(temp_monomial_coeffs.begin(), temp_monomial_coeffs.end(), coeffs_.begin());
-  refine_via_bjorck_pereyra(x_cheb_, y_cheb_);
+  std::copy(monomials.begin(), monomials.end(), coeffs_.begin());
+  refine(x_cheb_, y_cheb_);
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
@@ -277,7 +315,7 @@ C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monom
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::refine_via_bjorck_pereyra(
+C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::refine(
     const std::vector<InputType> &x_cheb_,
     const std::vector<OutputType> &y_cheb_) {
   for (std::size_t pass = 0; pass < kItersCompileTime; ++pass) {

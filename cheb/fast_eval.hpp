@@ -95,10 +95,17 @@ private:
   template <std::size_t N_total, std::size_t current_idx>
   static constexpr OutputType horner(const OutputType *c_ptr, InputType x) noexcept;
 
+  template <int K_Current, int K_Target, int OuterUnrollFactor, class VecInputType, class VecOutputType>
+  void horner(
+      VecInputType *pt_batches,
+      VecOutputType *acc_batches) const noexcept;
+
   // Evaluate multiple points using SIMD with unrolling
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-  void process_polynomial_horner(InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
+  void horner_polyeval(InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
+  template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
+  void no_inline_horner_polyeval(InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
   C20CONSTEXPR static std::vector<OutputType> bjorck_pereyra(const std::vector<InputType> &x,
                                                              const std::vector<OutputType> &y);
@@ -106,8 +113,8 @@ private:
   C20CONSTEXPR static std::vector<OutputType> newton_to_monomial(const std::vector<OutputType> &alpha,
                                                                  const std::vector<InputType> &nodes);
 
-  C20CONSTEXPR void refine_via_bjorck_pereyra(const std::vector<InputType> &x_cheb_,
-                                              const std::vector<OutputType> &y_cheb_);
+  C20CONSTEXPR void refine(const std::vector<InputType> &x_cheb_,
+                           const std::vector<OutputType> &y_cheb_);
 };
 
 // -----------------------------------------------------------------------------
