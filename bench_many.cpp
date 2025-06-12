@@ -19,7 +19,7 @@ int main() {
   constexpr bool run_constexpr_benchmarks = !run_non_constexpr_benchmarks;
 
   // Define the number of points to benchmark
-  constexpr size_t num_points = 2000;
+  constexpr size_t num_points = 10000;
 
   // Data structures for the chosen number of points
   alignas(64) std::array<double, num_points> random_points{};
@@ -31,9 +31,9 @@ int main() {
 
   // Essential constexpr declarations (placed just before their dependent uses)
   constexpr auto f = [](double x) { return std::cos(x); };
-  constexpr double a = -.5;
-  constexpr double b = .5;
-  constexpr auto degree = 32;
+  constexpr double a = -.1;
+  constexpr double b = .1;
+  constexpr auto degree = 16;
 
   // Now, declare objects that depend on the above constexprs
   const auto evaluator = poly_eval::make_func_eval(f, degree, a, b);
@@ -43,7 +43,7 @@ int main() {
   std::uniform_real_distribution<double> dist{a, b}; // Depends on 'a' and 'b'
 
   bench.title("Monomial Vectorization Benchmark").unit("evals").warmup(1'000).relative(false).
-        minEpochIterations(10'000).batch(num_points); // Set batch size based on num_points
+        minEpochIterations(5'000).batch(num_points); // Set batch size based on num_points
 
   // Populate all data sets
   for (auto &pt : random_points) {
@@ -96,7 +96,7 @@ int main() {
     std::ranges::fill(aligned_output, 0.0);
 
     bench.run("manual vectorization (aligned)", [&] {
-      evaluator.operator()<true, true>(aligned_random_points.data(), aligned_output.data(),
+      evaluator(aligned_random_points.data(), aligned_output.data(),
                                        aligned_random_points.size());
     });
     const auto sum_aligned_manual = std::accumulate(aligned_output.begin(), aligned_output.end(), 0.0);
@@ -126,7 +126,7 @@ int main() {
     std::ranges::fill(output, 0.0);
 
     bench.run("constexpr manual vectorization (std::array)", [&] {
-      fixed_evaluator.operator()<true, true>(random_points.data(), output.data(), random_points.size());
+      fixed_evaluator(random_points.data(), output.data(), random_points.size());
     });
     const auto sum_manual_const = std::accumulate(output.begin(), output.end(), 0.0);
     std::ranges::fill(output, 0.0);
