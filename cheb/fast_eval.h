@@ -4,7 +4,6 @@
 #include <array>
 #include <vector>
 #include <cmath>
-#include <complex>
 #include <utility>
 #include <functional>
 #include <type_traits>
@@ -74,7 +73,8 @@ public:
 
   OutputType operator()(InputType pt) const noexcept;
 
-  void operator()(InputType* pts, OutputType* out, int num_points) const noexcept;
+  template<bool pts_aligned=false, bool out_aligned=false>
+  void operator()(InputType* pts, OutputType* out, std::size_t num_points) const noexcept;
 
   const Buffer<OutputType, N_compile_time> &coeffs() const noexcept;
 
@@ -88,7 +88,13 @@ private:
   template <class T> constexpr T map_to_domain(T T_arg) const;
   template <class T> constexpr T map_from_domain(T T_arg) const;
 
-  static OutputType horner(const Buffer<OutputType, N_compile_time> &c, InputType x) noexcept;
+  // Refactored declaration for horner
+  static OutputType horner(const OutputType* c_ptr, std::size_t c_size, InputType x) noexcept;
+
+  // Evaluate multiple points using SIMD with unrolling
+  template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
+  void process_polynomial_horner(InputType* pts, OutputType* out, std::size_t num_points) const noexcept;
+
 
   std::vector<OutputType> bjorck_pereyra(const std::vector<InputType> &x,
                                          const std::vector<OutputType> &y) const;
@@ -145,7 +151,9 @@ private:
   constexpr InputType map_to_domain(InputType T_arg) const;
   constexpr InputType map_from_domain(InputType T_arg) const;
 
-  static constexpr OutputType horner(const std::array<OutputType, N_DEGREE> &c, InputType x) noexcept;
+  // Refactored declaration for horner
+  static constexpr OutputType horner(const OutputType* c_ptr, InputType x) noexcept;
+
 
   static constexpr std::array<OutputType, N_DEGREE>
   bjorck_pereyra_constexpr(const std::array<InputType, N_DEGREE> &x,
@@ -197,7 +205,11 @@ constexpr auto make_constexpr_func_eval(Func F,
 } // namespace poly_eval
 
 // Include implementations
+
 #include "fast_eval_runtime.h"
+
 #if __cplusplus >= 202002L
+
 #include "fast_eval_compile_time.h"
+
 #endif

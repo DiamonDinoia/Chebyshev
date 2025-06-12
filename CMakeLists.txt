@@ -47,7 +47,7 @@ CPMAddPackage(
 
 add_library(cheb INTERFACE)
 target_include_directories(cheb INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cheb)
-
+target_link_libraries(cheb INTERFACE xsimd)
 # ─────────────────────────────────────────────
 # Build executable
 add_executable(chebyshev_nd main.cpp)

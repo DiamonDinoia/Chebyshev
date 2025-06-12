@@ -1,8 +1,14 @@
 // poly_eval_runtime_impl.hpp - C++17 compatible runtime implementation details
 #pragma once
+
+#include "macros.h"
+#include "utils.h"
+
 #include <cassert>
 #include <iomanip>
 #include <iostream>
+#include <xsimd/xsimd.hpp>
+
 
 // No need to include "poly_eval.hpp" here, as it's included by poly_eval.hpp
 // This file is meant to be included *by* poly_eval.hpp
@@ -50,19 +56,118 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, InputType a
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
+FAST_MATH_BEGIN
 typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
 FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType pt) const noexcept {
-  InputType xi = map_from_domain(pt);
-  return horner(coeffs_, xi);
+  const auto xi = map_from_domain(pt);
+  return horner(coeffs_.data(), coeffs_.size(), xi); // Pass data pointer and size
 }
 
+FAST_MATH_END
+
+
+// Batch evaluation implementation using SIMD and unrolling
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType *pts, OutputType *out,
-                                                                    int num_points) const noexcept {
-  for (int i = 0; i < num_points; ++i) {
-    out[i] = (*this)(pts[i]);
+template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
+__always_inline void FuncEval<Func, N_compile_time, Iters_compile_time>::process_polynomial_horner(
+    InputType *pts, OutputType *out, std::size_t num_points) const noexcept {
+
+  const int simd_size = xsimd::batch<InputType>::size;
+  const OutputType *coeffs_ptr = coeffs_.data();
+  const int coeffs_size = coeffs_.size();
+  const int trunc_size = num_points & (-simd_size * OuterUnrollFactor);
+  constexpr auto pts_aligment = [] {
+    if constexpr (pts_aligned) {
+      return xsimd::aligned_mode{};
+    } else {
+      return xsimd::unaligned_mode{};
+    }
+  }();
+  constexpr auto out_aligment = [] {
+    if constexpr (out_aligned) {
+      return xsimd::aligned_mode{};
+    } else {
+      return xsimd::unaligned_mode{};
+    }
+  }();
+
+  for (std::size_t i = 0; i < trunc_size; i += simd_size * OuterUnrollFactor) {
+    // Use arrays to hold the batches and accumulators
+    xsimd::batch<InputType> pt_batches[OuterUnrollFactor];
+    xsimd::batch<OutputType> acc_batches[OuterUnrollFactor];
+
+    // Load input points and initialize accumulators in a loop
+    for (int j = 0; j < OuterUnrollFactor; ++j) {
+      // Ensure we don't read past num_points for partial blocks
+      pt_batches[j] = map_from_domain(xsimd::load(pts + i + j * simd_size, pts_aligment));
+      // Initialize with the last coefficient
+      acc_batches[j] = xsimd::batch<OutputType>(coeffs_ptr[coeffs_size - 1]);
+    }
+
+    // Process each batch in the inner loop (Horner's method)
+    // Iterating from coeffs_size - 2 down to 0
+    for (int k = coeffs_size - 2; k >= 0; --k) {
+      for (int j = 0; j < OuterUnrollFactor; ++j) {
+        // acc_batches[j] = pt_batches[j] * acc_batches[j] + coeffs_ptr[k]
+        acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(coeffs_ptr[k]));
+      }
+    }
+
+    // Store results in a loop
+    for (int j = 0; j < OuterUnrollFactor; ++j) {
+      xsimd::store(out + i + j * simd_size, acc_batches[j], out_aligment);
+    }
+  }
+  // Handle any remaining points that didn't fit into the full unrolled blocks
+  for (int i = trunc_size; i < num_points; ++i) {
+    out[i] = operator()(pts[i]);
   }
 }
+
+
+template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
+template <bool pts_aligned, bool out_aligned>
+FAST_MATH_BEGIN
+void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(InputType *pts, OutputType *out,
+                                                                    std::size_t num_points) const noexcept {
+  // find out the alignment of pts and out
+  constexpr auto simd_size = xsimd::batch<InputType>::size;
+  constexpr auto alignment = xsimd::best_arch::alignment();
+  const auto coeffs_ptr = coeffs_.data();
+  const auto coeffs_size = coeffs_.size();
+
+  constexpr auto unroll_factor = 4;
+
+  if constexpr (pts_aligned) {
+    if constexpr (out_aligned) {
+      return process_polynomial_horner<unroll_factor, true, true>(pts, out, num_points);
+    } else {
+      return process_polynomial_horner<unroll_factor, true, false>(pts, out, num_points);
+    }
+  } else {
+    const auto pts_alignment = detail::get_alignment(pts);
+    const auto out_alignment = detail::get_alignment(out);
+
+    if (pts_alignment != out_alignment) {
+      if (pts_alignment >= alignment) {
+        return process_polynomial_horner<unroll_factor, true, false>(pts, out, num_points);
+      }
+      if (out_alignment >= alignment) {
+        return process_polynomial_horner<unroll_factor, false, true>(pts, out, num_points);
+      }
+      return process_polynomial_horner<unroll_factor, false, false>(pts, out, num_points);
+    }
+
+    // process scalar until we reach the first aligned point
+    std::size_t i;
+    for (i = 0; i < num_points & (alignment - 1); ++i) {
+      out[i] = operator()(pts[i]);
+    }
+    return process_polynomial_horner<unroll_factor, true, true>(pts + i, out + i, num_points - i);
+  }
+}
+
+FAST_MATH_END
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 const Buffer<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType, N_compile_time> &
@@ -102,14 +207,18 @@ template <class T> constexpr T FuncEval<Func, N_compile_time,
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
-FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const Buffer<OutputType, N_compile_time> &c,
+FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const OutputType *c_ptr, std::size_t c_size,
                                                            InputType x) noexcept {
-  if (c.empty()) {
+  if (c_size == 0) {
     return static_cast<OutputType>(0.0);
   }
-  OutputType acc = c[c.size() - 1]; // Start with the highest degree coefficient
-  for (int k = static_cast<int>(c.size()) - 2; k >= 0; --k) {
-    acc = acc * x + c[k];
+  OutputType acc = c_ptr[c_size - 1]; // Start with the highest degree coefficient
+  for (int k = static_cast<int>(c_size) - 2; k >= 0; --k) {
+    if constexpr (std::is_same_v<InputType, OutputType> && std::is_floating_point_v<InputType>) {
+      acc = xsimd::fma(x, acc, c_ptr[k]);
+    } else {
+      acc = acc * x + c_ptr[k];
+    }
   }
   return acc;
 }
@@ -156,7 +265,7 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::refine_via_bjorck_perey
     std::vector<OutputType> r_cheb(deg_);
     for (int i = 0; i < deg_; ++i) {
       InputType xi = x_cheb_[i];
-      OutputType p_val = horner(this->coeffs_, xi);
+      OutputType p_val = horner(this->coeffs_.data(), this->coeffs_.size(), xi); // Pass data pointer and size
       r_cheb[i] = y_cheb_[i] - p_val;
     }
     std::vector<OutputType> newton_r = bjorck_pereyra(x_cheb_, r_cheb);

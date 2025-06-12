@@ -1,8 +1,11 @@
 // poly_eval_constexpr_impl.hpp - C++20 constexpr implementation details
 #pragma once
 
+
 #if __cplusplus >= 202002L
 
+#include "macros.h"
+#include <xsimd/xsimd.hpp>
 // No need to include "poly_eval.hpp" here, as it's included by poly_eval.hpp
 // This file is meant to be included *by* poly_eval.hpp
 
@@ -33,11 +36,11 @@ constexpr std::array<T, N> constexpr_linspace(T start, T end) {
 // Constexpr Horner Step (used by ConstexprFuncEval)
 // -----------------------------------------------------------------------------
 template <std::size_t N_total, std::size_t current_idx, typename OutputType, typename InputType>
-static constexpr OutputType horner_forward_step(const std::array<OutputType, N_total> &c, InputType x) {
+static constexpr OutputType horner_forward_step(const OutputType* c_ptr, InputType x) { // Changed to pointer
   if constexpr (current_idx == N_total - 1) {
-    return c[current_idx];
+    return c_ptr[current_idx];
   } else {
-    return std::fma(horner_forward_step<N_total, current_idx + 1, OutputType, InputType>(c, x), x, c[current_idx]);
+    return std::fma(horner_forward_step<N_total, current_idx + 1, OutputType, InputType>(c_ptr, x), x, c_ptr[current_idx]);
   }
 }
 
@@ -55,18 +58,24 @@ constexpr ConstexprFuncEval<Func, N_DEGREE, ITERS>::ConstexprFuncEval(Func F, In
 
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::OutputType
+FAST_MATH_BEGIN
 ConstexprFuncEval<Func, N_DEGREE, ITERS>::operator()(InputType pt) const noexcept {
-  InputType xi = map_from_domain(pt);
-  return horner(coeffs_, xi);
+  const auto xi = map_from_domain(pt);
+  return horner(coeffs_.data(), xi); // Pass the data pointer
 }
 
+FAST_MATH_END
+
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
+FAST_MATH_BEGIN
 constexpr void ConstexprFuncEval<Func, N_DEGREE, ITERS>::operator()(InputType *pts, OutputType *out,
                                                                     int num_points) const noexcept {
   for (int i = 0; i < num_points; ++i) {
     out[i] = (*this)(pts[i]);
   }
 }
+
+FAST_MATH_END
 
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr const std::array<typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::OutputType, N_DEGREE> &
@@ -88,11 +97,11 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::map_from_domain(const InputType T_arg)
 
 template <class Func, std::size_t N_DEGREE, std::size_t ITERS>
 constexpr typename ConstexprFuncEval<Func, N_DEGREE, ITERS>::OutputType
-ConstexprFuncEval<Func, N_DEGREE, ITERS>::horner(const std::array<OutputType, N_DEGREE> &c, InputType x) noexcept {
+ConstexprFuncEval<Func, N_DEGREE, ITERS>::horner(const OutputType* c_ptr, InputType x) noexcept { // Changed to pointer
   if constexpr (N_DEGREE == 0) {
     return static_cast<OutputType>(0.0);
   } else {
-    return detail::horner_forward_step<N_DEGREE, 0, OutputType, InputType>(c, x);
+    return detail::horner_forward_step<N_DEGREE, 0, OutputType, InputType>(c_ptr, x);
   }
 }
 
@@ -151,7 +160,7 @@ ConstexprFuncEval<Func, N_DEGREE, ITERS>::initialize_coeffs(Func F, InputType a,
     std::array<OutputType, N_DEGREE> r_cheb{};
     for (std::size_t i = 0; i < N_DEGREE; ++i) {
       InputType xi = x_cheb_nodes[i];
-      OutputType p_val = horner(current_coeffs, xi);
+      OutputType p_val = horner(current_coeffs.data(), xi); // Pass the data pointer
       r_cheb[i] = y_cheb_values[i] - p_val;
     }
     std::array<OutputType, N_DEGREE> newton_r = bjorck_pereyra_constexpr(x_cheb_nodes, r_cheb);
@@ -179,7 +188,7 @@ auto make_func_eval(Func F,
   static_assert(MaxN_val > 0, "Max polynomial degree must be positive.");
   static_assert(NumEvalPoints_val > 1, "Number of evaluation points must be greater than 1.");
 
-  std::vector<InputType> eval_points = linspace(a, b, static_cast<int>(NumEvalPoints_val));
+  std::vector<InputType> eval_points = detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
 
   for (int n = 1; n <= static_cast<int>(MaxN_val); ++n) {
     FuncEval<Func, 0, Iters_compile_time> current_evaluator(F, n, a, b);
@@ -300,8 +309,8 @@ constexpr auto make_constexpr_func_eval(Func F,
 
 template <std::size_t N_DEGREE, std::size_t Iters_compile_time, class Func>
 constexpr auto make_constexpr_func_eval(Func F,
-                                                typename function_traits<Func>::arg0_type a,
-                                                typename function_traits<Func>::arg0_type b) {
+                                        typename function_traits<Func>::arg0_type a,
+                                        typename function_traits<Func>::arg0_type b) {
   static_assert(N_DEGREE > 0, "Degree must be positive for compile-time fitting.");
   return ConstexprFuncEval<Func, N_DEGREE, Iters_compile_time>(F, a, b);
 }
