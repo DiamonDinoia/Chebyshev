@@ -1,4 +1,3 @@
-// poly_eval_runtime_impl.hpp - C++17 compatible runtime implementation details
 #pragma once
 
 #include "macros.h"

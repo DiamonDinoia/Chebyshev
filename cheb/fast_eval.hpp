@@ -1,4 +1,3 @@
-// poly_eval.hpp - Public Interface and Includes
 #pragma once
 
 #include <array>
@@ -137,7 +136,7 @@ C20CONSTEXPR auto make_func_eval(Func F, double eps, // eps as a runtime paramet
 
 #if __cplusplus >= 202002L
 // -----------------------------------------------------------------------------
-// C++20 make_func_eval for compile-time error tolerance (runtime fitting)
+// C++20 make_func_eval for compile-time error tolerance (compile time fitting)
 // -----------------------------------------------------------------------------
 template <double eps_val, std::size_t MaxN_val, std::size_t NumEvalPoints_val, std::size_t Iters_compile_time = 1, class
           Func>
