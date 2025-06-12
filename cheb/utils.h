@@ -3,11 +3,11 @@
 #include <bit>
 #endif
 #include <cstdint>
-
+#include "macros.h"
 
 namespace poly_eval::detail {
 template <typename T>
-static constexpr size_t get_alignment(const T *ptr) noexcept {
+ALWAYS_INLINE static constexpr size_t get_alignment(const T *ptr) noexcept {
   const auto address = reinterpret_cast<uintptr_t>(ptr);
 
   if (address == 0) {
@@ -33,5 +33,16 @@ static constexpr size_t get_alignment(const T *ptr) noexcept {
   return alignment;
 #endif
 }
+
+template <typename F, std::size_t... Is>
+ALWAYS_INLINE constexpr void unroll_loop_impl(F &&func, std::index_sequence<Is...>) {
+  (func(Is), ...); // C++17 fold expression for comma operator
+}
+
+template <std::size_t Count, typename F>
+ALWAYS_INLINE constexpr void unroll_loop(F &&func) {
+  unroll_loop_impl(std::forward<F>(func), std::make_index_sequence<Count>{});
+}
+
 
 }

@@ -75,7 +75,7 @@ public:
   C20CONSTEXPR OutputType operator()(InputType pt) const noexcept;
 
   template <bool pts_aligned = false, bool out_aligned = false>
-  void operator()(InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
+  void operator()(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
   C20CONSTEXPR const Buffer<OutputType, N_compile_time> &coeffs() const noexcept;
 
@@ -86,8 +86,8 @@ private:
 
   C20CONSTEXPR void initialize_coeffs(Func F);
 
-  template <class T> constexpr T map_to_domain(T T_arg) const;
-  template <class T> constexpr T map_from_domain(T T_arg) const;
+  template <class T> ALWAYS_INLINE constexpr T map_to_domain(T T_arg) const;
+  template <class T> ALWAYS_INLINE constexpr T map_from_domain(T T_arg) const;
 
   // Refactored declaration for horner
   constexpr static OutputType horner(const OutputType *c_ptr, std::size_t c_size, InputType x) noexcept;
@@ -102,10 +102,10 @@ private:
 
   // Evaluate multiple points using SIMD with unrolling
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-  void horner_polyeval(InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
+  void horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-  void no_inline_horner_polyeval(InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
+  void no_inline_horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
   C20CONSTEXPR static std::vector<OutputType> bjorck_pereyra(const std::vector<InputType> &x,
                                                              const std::vector<OutputType> &y);

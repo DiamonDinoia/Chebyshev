@@ -33,7 +33,7 @@ int main() {
   constexpr auto f = [](double x) { return std::cos(x); };
   constexpr double a = -.1;
   constexpr double b = .1;
-  constexpr auto degree = 16;
+  constexpr auto degree = 32;
 
   // Now, declare objects that depend on the above constexprs
   const auto evaluator = poly_eval::make_func_eval(f, degree, a, b);
