@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "macros.h"
 
+
 namespace poly_eval::detail {
 template <typename T>
 ALWAYS_INLINE static constexpr size_t get_alignment(const T *ptr) noexcept {
@@ -66,6 +67,17 @@ constexpr double cos(const double x) noexcept {
   }();
   /* cos & sin minimax polynomials as lambdas with embedded coeffs */
   constexpr auto cos_poly = [](const double yy) constexpr {
+   /*
+    * The coefficients c1-c6 are under the following license:
+    * ====================================================
+    * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+    *
+    * Developed at SunSoft, a Sun Microsystems, Inc. business.
+    * Permission to use, copy, modify, and distribute this
+    * software is freely granted, provided that this notice
+    * is preserved.
+    * ====================================================
+    */
     constexpr double c1 = 4.16666666666666019037e-02;
     constexpr double c2 = -1.38888888888741095749e-03;
     constexpr double c3 = 2.48015872894767294178e-05;

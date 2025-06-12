@@ -69,7 +69,7 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner(
     VecInputType * RESTRICT pt_batches,
     VecOutputType *RESTRICT acc_batches) const noexcept {
   // Array of accumulator batches
-  // No monomialsptr needed; 'this->monomials' is accessible
+  // No monomials_ptr needed; 'this->monomials' is accessible
 
   // Base case for the recursion: if K_Current is less than K_Target, stop.
   if constexpr (K_Current >= K_Target) {
@@ -97,19 +97,21 @@ FAST_MATH_BEGIN
 ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_polyeval(
     const InputType * RESTRICT pts, OutputType * RESTRICT out, std::size_t num_points) const noexcept {
 
-  const auto simd_size = xsimd::batch<InputType>::size;
-  const auto *monomialsptr = monomials.data();
-  const auto monomialssize = monomials.size();
+  static_assert(OuterUnrollFactor > 0 && (OuterUnrollFactor & (OuterUnrollFactor - 1)) == 0,
+              "OuterUnrollFactor must be a power of two greater than zero.");
+  static constexpr auto simd_size = xsimd::batch<InputType>::size;
+  const auto monomials_ptr = monomials.data();
+  const auto monomials_size = monomials.size();
   const auto trunc_size = num_points & (-simd_size * OuterUnrollFactor);
 
-  constexpr auto pts_aligment = [] {
+  static constexpr auto pts_aligment = [] {
     if constexpr (pts_aligned) {
       return xsimd::aligned_mode{};
     } else {
       return xsimd::unaligned_mode{};
     }
   }();
-  constexpr auto out_aligment = [] {
+  static constexpr auto out_aligment = [] {
     if constexpr (out_aligned) {
       return xsimd::aligned_mode{};
     } else {
@@ -127,18 +129,18 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_po
       // Ensure we don't read past num_points for partial blocks
       pt_batches[j] = map_from_domain(xsimd::load(pts + i + j * simd_size, pts_aligment));
       // Initialize with the last coefficient
-      acc_batches[j] = xsimd::batch<OutputType>(monomialsptr[monomialssize - 1]);
+      acc_batches[j] = xsimd::batch<OutputType>(monomials_ptr[monomials_size - 1]);
     });
 
     // Process each batch in the inner loop (Horner's method)
-    // Iterating from monomialssize - 2 down to 0
+    // Iterating from monomials_size - 2 down to 0
     if constexpr (N_compile_time > 0) {
       horner<static_cast<int>(N_compile_time - 1), 0, OuterUnrollFactor>(pt_batches, acc_batches);
     } else {
-      for (int k = monomialssize - 2; k >= 0; --k) {
+      for (int k = monomials_size - 2; k >= 0; --k) {
         detail::unroll_loop<OuterUnrollFactor>([&](const auto j) {
-          // acc_batches[j] = pt_batches[j] * acc_batches[j] + monomialsptr[k]
-          acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(monomialsptr[k]));
+          // acc_batches[j] = pt_batches[j] * acc_batches[j] + monomials_ptr[k]
+          acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(monomials_ptr[k]));
         });
       }
     }
@@ -176,8 +178,8 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputT
   // find out the alignment of pts and out
   constexpr auto simd_size = xsimd::batch<InputType>::size;
   constexpr auto alignment = xsimd::best_arch::alignment();
-  const auto monomialsptr = monomials.data();
-  const auto monomialssize = monomials.size();
+  const auto monomial_ptr = monomials.data();
+  const auto monomial_size = monomials.size();
 
   constexpr auto unroll_factor = 4;
 
@@ -276,7 +278,7 @@ FAST_MATH_END
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
 FAST_MATH_BEGIN
-C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const OutputType * RESTRICT c_ptr,
+constexpr FuncEval<Func, N_compile_time, Iters_compile_time>::horner(const OutputType * RESTRICT c_ptr,
                                                                         std::size_t c_size,
                                                                         InputType x) noexcept {
   if constexpr (N_compile_time != 0) {
