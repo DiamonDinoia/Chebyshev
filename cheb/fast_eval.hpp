@@ -44,6 +44,11 @@ template <typename T, std::size_t N_compile_time_val>
 using Buffer = std::conditional_t<N_compile_time_val == 0, std::vector<T>, std::array<T, N_compile_time_val>>;
 
 // -----------------------------------------------------------------------------
+// Forward declarations for FuncEvalMany
+template <typename... EvalTypes> class FuncEvalMany;
+// Forward declaration for FuncEval
+
+// -----------------------------------------------------------------------------
 // FuncEval: monomial least-squares fit using Chebyshev sampling
 // (Runtime or Fixed-Size Compile-Time Storage, but fitting is runtime)
 // -----------------------------------------------------------------------------
@@ -54,14 +59,6 @@ public:
 
   static constexpr std::size_t kDegreeCompileTime = N_compile_time;
   static constexpr std::size_t kItersCompileTime = Iters_compile_time;
-
-  // template <std::size_t CurrentN = N_compile_time,
-  //           typename = std::enable_if_t<CurrentN == 0>>
-  // C20CONSTEXPR FuncEval(Func F, int n, InputType a, InputType b);
-  //
-  // template <std::size_t CurrentN = N_compile_time,
-  //           typename = std::enable_if_t<CurrentN != 0>>
-  // C20CONSTEXPR FuncEval(Func F, InputType a, InputType b);
 
   template <std::size_t CurrentN = N_compile_time, typename = std::enable_if_t<CurrentN != 0>>
   C20CONSTEXPR FuncEval(Func F, InputType a, InputType b, const InputType *pts = nullptr);
@@ -109,56 +106,81 @@ private:
                                                                  const std::vector<InputType> &nodes);
 
   C20CONSTEXPR void refine(const std::vector<InputType> &x_cheb_, const std::vector<OutputType> &y_cheb_);
+
+  // Friend declaration for FuncEvalMany to access private members
+  template <typename... EvalTypes> friend class FuncEvalMany;
 };
 
-// -----------------------------------------------------------------------------
-// FuncEvalGroup: Groups multiple FuncEval instances and provides
-// - coeffs(): tuple of each FuncEval's coefficient buffer
-// - operator()(pt): evaluates all functions at pt, returning std::array<OutputType, N>
-// -----------------------------------------------------------------------------
-
-template <typename... EvalTypes> class FuncEvalMany {
-  // Deduce common InputType and OutputType
+template <typename... EvalTypes>
+class FuncEvalMany {
+  static_assert(sizeof...(EvalTypes) > 0, "At least one FuncEval is required");
   using FirstEval = std::tuple_element_t<0, std::tuple<EvalTypes...>>;
 
 public:
-  using InputType = typename FirstEval::arg0_type;
-  using OutputType = typename FirstEval::result_type;
+  using InputType = typename FirstEval::InputType;
+  static_assert((std::is_same_v<typename EvalTypes::InputType, InputType> && ...),
+                "All FuncEval types must have the same InputType");
 
-  /// Construct from pre-built FuncEval objects
-  C20CONSTEXPR explicit FuncEvalMany(EvalTypes... evals) : evals_{std::move(evals)...} {}
+  /// Construct from pre-built evaluators (forwarded/moved)
+  C20CONSTEXPR explicit FuncEvalMany(EvalTypes... evals)
+      : evals_{std::move(evals)...} {}
 
-  /// Number of functions in the group
+  /// Number of evaluators in the group
   [[nodiscard]] constexpr std::size_t size() const noexcept { return sizeof...(EvalTypes); }
 
-  /// Return a tuple of each FuncEval::coeffs()
-  constexpr auto coeffs() const { return coeffs_impl(std::make_index_sequence<sizeof...(EvalTypes)>{}); }
+  /// Tuple of coefficient buffers
+  constexpr auto coeffs() const {
+    return coeffs_impl(std::make_index_sequence<sizeof...(EvalTypes)>{});
+  }
 
-  /// Evaluate all functions at a single point, returning std::array
-  std::array<OutputType, sizeof...(EvalTypes)> C20CONSTEXPR operator()(InputType pt) const noexcept {
-    return eval_at_impl(pt, std::make_index_sequence<sizeof...(EvalTypes)>{});
+  // ---------------------------------------------------------------------------
+  // Evaluation APIs
+  // ---------------------------------------------------------------------------
+
+  /// Evaluate **all** evaluators at the **same** input value
+  [[nodiscard]] constexpr auto operator()(InputType arg) const noexcept {
+    return eval_impl(arg, std::make_index_sequence<sizeof...(EvalTypes)>{});
+  }
+
+  /// Evaluate with one argument *per* evaluator (must pass exactly N args)
+  template <typename... Args,
+            std::enable_if_t<sizeof...(Args) == sizeof...(EvalTypes) && (std::is_convertible_v<Args, InputType> && ...),
+                             int> = 0>
+  [[nodiscard]] constexpr auto operator()(Args&&... args) const noexcept {
+    return eval_args_impl(std::make_index_sequence<sizeof...(EvalTypes)>{}, std::forward<Args>(args)...);
+  }
+
+  /// Evaluate with a tuple containing exactly N inputs
+  template <typename Tuple,
+            std::enable_if_t<std::tuple_size_v<std::remove_reference_t<Tuple>> == sizeof...(EvalTypes), int> = 0>
+  [[nodiscard]] constexpr auto operator()(Tuple&& tup) const noexcept {
+    return std::apply([this](auto&&... elems) {
+                        return (*this)(std::forward<decltype(elems)>(elems)...);
+                      },
+                      std::forward<Tuple>(tup));
   }
 
 private:
   std::tuple<EvalTypes...> evals_;
 
-  // Helper to evaluate all at once into std::array
+  // Evaluate every evaluator with the **same** argument
   template <std::size_t... I>
-  constexpr std::array<OutputType, sizeof...(EvalTypes)> eval_at_impl(InputType pt,
-                                                                      std::index_sequence<I...>) const noexcept {
-    return {{std::get<I>(evals_)(pt)...}};
+  constexpr auto eval_impl(InputType arg, std::index_sequence<I...>) const noexcept {
+    return std::make_tuple(std::get<I>(evals_)(arg)...);
   }
 
-  // Helper to gather coeffs into a tuple
-  template <std::size_t... I> auto coeffs_impl(std::index_sequence<I...>) const {
+  // Evaluate each evaluator with its corresponding argument
+  template <std::size_t... I, typename... Args>
+  constexpr auto eval_args_impl(std::index_sequence<I...>, Args&&... args) const noexcept {
+    auto packed = std::forward_as_tuple(std::forward<Args>(args)...);
+    return std::make_tuple(std::get<I>(evals_)(std::get<I>(packed))...);
+  }
+
+  // Gather coeff buffers
+  template <std::size_t... I>
+  constexpr auto coeffs_impl(std::index_sequence<I...>) const {
     return std::make_tuple(std::get<I>(evals_).coeffs()...);
   }
-
-  static_assert((std::is_same_v<typename EvalTypes::arg0_type, InputType> && ...),
-                "All FuncEval types must have the same InputType");
-  static_assert((std::is_same_v<typename EvalTypes::result_type, OutputType> && ...),
-                "All FuncEval types must have the same OutputType");
-  static_assert(sizeof...(EvalTypes) > 0, "At least one FuncEval is required");
 };
 
 // 1) Compile-time degree only
@@ -186,9 +208,9 @@ constexpr auto make_func_eval(Func F, typename function_traits<Func>::arg0_type 
                               typename function_traits<Func>::arg0_type b);
 #endif
 
-template <typename... EvalTypes> C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval_group(EvalTypes... evals) {
-  return FuncEvalGroup<EvalTypes...>(std::move(evals)...);
-}
+template <typename... EvalTypes>
+C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval_many(EvalTypes... evals) noexcept;
+
 } // namespace poly_eval
 
 // Include implementations

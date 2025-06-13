@@ -16,3 +16,8 @@ target_link_libraries(eps_eval PRIVATE cheb)
 add_executable(es_kernel es_kernel.cpp)
 target_compile_features(es_kernel PRIVATE cxx_std_20)
 target_link_libraries(es_kernel PRIVATE cheb)
+
+
+add_executable(many_funcs many_func_example.cpp)
+target_compile_features(many_funcs PRIVATE cxx_std_20)
+target_link_libraries(many_funcs PRIVATE cheb)

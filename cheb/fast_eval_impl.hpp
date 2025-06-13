@@ -337,6 +337,8 @@ C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::refine(con
   }
 }
 
+
+
 // -----------------------------------------------------------------------------
 // make_func_eval API implementations (Runtime, C++17 compatible)
 // -----------------------------------------------------------------------------
@@ -451,5 +453,12 @@ NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::
   return FuncEval<Func, 0, Iters_compile_time>(F, static_cast<int>(MaxN_val), a, b);
 }
 #endif
+
+
+template <typename... EvalTypes>
+C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval_many(EvalTypes... evals) noexcept {
+  return FuncEvalMany<EvalTypes...>(std::move(evals)...);
+}
+
 
 } // namespace poly_eval
