@@ -393,7 +393,7 @@ private:
 
   // At first call, instantiates the table; then dispatches in O(1).
   double dispatch_eval(const double *c, std::size_t n, double x) const {
-    static constexpr auto table =
+    alignas(32) static constexpr auto table =
         make_table(std::make_index_sequence<DEFAULT_MAX_COEFFS + 1>{});
     if (n > DEFAULT_MAX_COEFFS)
       throw std::out_of_range("Polynomial length exceeds DEFAULT_MAX_COEFFS");
@@ -402,7 +402,6 @@ private:
 };
 
 
-// Assume Mon1D<Func> is provided elsewhere
 template <class Func>
 class FixedEst : public Mon1D<Func> {
 public:
@@ -418,78 +417,95 @@ public:
   double operator()(double pt) const {
     // map into [-1,1]
     const double x = this->map_from_domain(pt);
-    // dispatch based on runtime length
     return dispatch_eval(this->mono.data(), this->mono.size(), x);
   }
 
 private:
-  // maximum supported degree + 1
+  // Maximum supported degree + 1
   static constexpr std::size_t DEFAULT_MAX_COEFFS = 64;
 
-  //----------------------------------------
-  // 1) compile-time helper: floor(log2(n))
-  //----------------------------------------
-  static constexpr std::size_t clog2(std::size_t n) {
-    return (n < 2 ? 0 : 1 + clog2(n / 2));
-  }
-
-  //----------------------------------------
-  // 2) Estrin-range: unrolled via if constexpr
-  //----------------------------------------
-  template <std::size_t I, std::size_t M>
-  __always_inline static constexpr double estrin_range(const double *c, const double *xpows) {
-    if constexpr (M == 0) {
-      return 0.0;
-    } else if constexpr (M == 1) {
-      return c[I];
-    } else if constexpr (M == 2) {
-      // c[I] + c[I+1]*x  via fmadd: x = xpows[0]
-      return std::fma(c[I + 1], xpows[0], c[I]);
+  // --- 2) Compile-time Log2 function ---
+  template <std::size_t N>
+  __always_inline
+  static constexpr std::size_t ct_log2() {
+    static_assert(N > 0, "ct_log2 of zero is undefined.");
+    if constexpr (N == 1) {
+      return 0;
     } else {
-      constexpr std::size_t k = clog2(M - 1);
-      constexpr std::size_t block = std::size_t(1) << k;
-      double low = estrin_range<I, block>(c, xpows);
-      double high = estrin_range<I + block, M - block>(c, xpows);
-      return std::fma(high, xpows[k], low);
+      return ct_log2<(N / 2)>() + 1;
     }
   }
 
-  //----------------------------------------
-  // 3) Single-call entry: build xpows + recurse
-  //----------------------------------------
-  template <std::size_t N>
-  __always_inline static double eval_fixed(const double *coeffs, double x) {
-    constexpr std::size_t max_exp = (N > 1 ? N - 1 : 1);
-    constexpr std::size_t maxk = clog2(max_exp);
-
-    std::array<double, maxk + 1> xpows{};
-    xpows[0] = x;
-    for (std::size_t k = 1; k <= maxk; ++k)
-      xpows[k] = xpows[k - 1] * xpows[k - 1];
-
-    return estrin_range<0, N>(coeffs, xpows.data());
+  // --- 3) Compute x^(2^K) at compile time ---
+  template <std::size_t K>
+  __always_inline
+  static constexpr double compute_x_power_of_two(double x) {
+    if constexpr (K == 0) {
+      return x;
+    } else {
+      double prev = compute_x_power_of_two<K - 1>(x);
+      return prev * prev;
+    }
   }
 
-  //----------------------------------------
-  // 4) Build constexpr dispatch table
-  //----------------------------------------
-  template <std::size_t... Is>
-  static constexpr auto make_table(std::index_sequence<Is...>) {
-    using Fn = double(*)(const double *, double);
-    return std::array<Fn, DEFAULT_MAX_COEFFS + 1>{&eval_fixed<Is>...};
+  // --- 4) Build tuple of powers (x^1, x^2, x^4, ...) ---
+  template <std::size_t... K>
+  __always_inline
+  static constexpr auto make_powers_tuple(double x, std::index_sequence<K...>) {
+    return std::make_tuple(compute_x_power_of_two<K>(x)...);
   }
 
-  //----------------------------------------
-  // 5) Runtime dispatcher
-  //----------------------------------------
-  double dispatch_eval(const double *c, std::size_t n, double x) const {
-    static constexpr auto table =
-        make_table(std::make_index_sequence<DEFAULT_MAX_COEFFS + 1>{});
+  // --- 5) Estrin's recursive evaluation ---
+  template <typename PowersTuple, std::size_t Count>
+  __always_inline
+  static constexpr double estrin_eval_recursive(
+      double x, PowersTuple powers, const double *coeffs) {
+    if constexpr (Count == 0) {
+      return 0.0;
+    } else if constexpr (Count == 1) {
+      return coeffs[0];
+    } else {
+      constexpr std::size_t deg = Count - 1;
+      constexpr std::size_t split = (deg == 0 ? 1 : (1ULL << ct_log2<deg>()));
+      constexpr std::size_t idx = ct_log2<split>();
+      const double low = estrin_eval_recursive<PowersTuple, split>(x, powers, coeffs);
+      const double high = estrin_eval_recursive<PowersTuple, Count - split>(
+          x, powers, coeffs + split);
+      return std::fma(high, std::get<idx>(powers), low);
+    }
+  }
+
+  // --- 6) Public interface: Estrin's evaluation for N_coeffs ---
+  template <std::size_t N_coeffs>
+  __always_inline
+  static constexpr double estrin_eval(double x, const double *coeffs) {
+    if constexpr (N_coeffs == 0)
+      return 0;
+    if constexpr (N_coeffs == 1) {
+      return coeffs[0];
+    } else {
+      constexpr std::size_t max_deg = N_coeffs - 1;
+      constexpr std::size_t max_k = ct_log2<max_deg>();
+      auto powers = make_powers_tuple(x, std::make_index_sequence<max_k + 1>{});
+      return estrin_eval_recursive<decltype(powers), N_coeffs>(x, powers, coeffs);
+    }
+  }
+
+  // --- 7) Runtime dispatcher using function pointer table ---
+  double dispatch_eval(const double *coeffs, std::size_t n, double x) const {
+    static constexpr auto table = []() {
+      using Fn = double(*)(double, const double *);
+      std::array<Fn, DEFAULT_MAX_COEFFS + 1> tbl{};
+      []<std::size_t... Is>(std::index_sequence<Is...>, auto &t) {
+        ((t[Is] = &FixedEst::estrin_eval<Is>), ...);
+      }(std::make_index_sequence<DEFAULT_MAX_COEFFS + 1>{}, tbl);
+      return tbl;
+    }();
 
     if (n > DEFAULT_MAX_COEFFS)
       throw std::out_of_range("Polynomial length exceeds DEFAULT_MAX_COEFFS");
 
-    return table[n](c, x);
+    return table[n](x, coeffs);
   }
 };
 

@@ -27,7 +27,7 @@ int main() {
   ankerl::nanobench::Bench bench;
   bench.title("Chebyshev Interpolation Benchmark").unit("evals").warmup(100).relative(true).minEpochIterations(10'000'000);
 
-  for (size_t n = 1; n <= 16; n += 1) {
+  for (size_t n = 1; n <= 32; n += 1) {
     // bench_interpolation<Cheb1D<decltype(f)>>(bench, "Cheb1D", n, f);
     // bench_interpolation<BarCheb1D<decltype(f)>>(bench, "BarCheb1D", n, f);
     bench_interpolation<Hor1D<decltype(f)>>(bench, "Hor1D", n, f);
