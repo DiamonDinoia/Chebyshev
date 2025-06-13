@@ -1,13 +1,13 @@
 #include "fast_eval.hpp"
 
-#include <nanobench.h>
 #include <cmath>
-#include <iostream>
-#include <random>
-#include <numeric> // For std::accumulate
-#include <vector>  // For std::vector
-#include <xsimd/xsimd.hpp> // For xsimd::aligned_allocator
 #include <iomanip> // For std::setprecision
+#include <iostream>
+#include <nanobench.h>
+#include <numeric> // For std::accumulate
+#include <random>
+#include <vector>          // For std::vector
+#include <xsimd/xsimd.hpp> // For xsimd::aligned_allocator
 
 int main() {
   // Non-constexpr declarations that do not immediately depend on constexprs
@@ -33,17 +33,20 @@ int main() {
   constexpr auto f = [](double x) { return std::cos(x); };
   constexpr double a = -.1;
   constexpr double b = .1;
-  constexpr auto degree = 32;
-
+  constexpr auto degree = 16;
   // Now, declare objects that depend on the above constexprs
   const auto evaluator = poly_eval::make_func_eval(f, degree, a, b);
-  constexpr auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
+  static constexpr auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
 
   // Other non-constexpr declarations that depend on previously defined constexprs
   std::uniform_real_distribution<double> dist{a, b}; // Depends on 'a' and 'b'
 
-  bench.title("Monomial Vectorization Benchmark").unit("evals").warmup(1'000).relative(false).
-        minEpochIterations(5'000).batch(num_points); // Set batch size based on num_points
+  bench.title("Monomial Vectorization Benchmark")
+      .unit("evals")
+      .warmup(1'000)
+      .relative(false)
+      .minEpochIterations(5'000)
+      .batch(num_points); // Set batch size based on num_points
 
   // Populate all data sets
   for (auto &pt : random_points) {
@@ -65,9 +68,8 @@ int main() {
     const auto sum_auto = std::accumulate(output.begin(), output.end(), 0.0);
     std::ranges::fill(output, 0.0);
 
-    bench.run("manual vectorization (std::array)", [&] {
-      evaluator.operator()<true, true>(random_points.data(), output.data(), random_points.size());
-    });
+    bench.run("manual vectorization (std::array)",
+              [&] { evaluator.operator()<true, true>(random_points.data(), output.data(), random_points.size()); });
     const auto sum_manual = std::accumulate(output.begin(), output.end(), 0.0);
     std::ranges::fill(output, 0.0);
 
@@ -95,10 +97,8 @@ int main() {
     const auto sum_aligned_auto = std::accumulate(aligned_output.begin(), aligned_output.end(), 0.0);
     std::ranges::fill(aligned_output, 0.0);
 
-    bench.run("manual vectorization (aligned)", [&] {
-      evaluator(aligned_random_points.data(), aligned_output.data(),
-                                       aligned_random_points.size());
-    });
+    bench.run("manual vectorization (aligned)",
+              [&] { evaluator(aligned_random_points.data(), aligned_output.data(), aligned_random_points.size()); });
     const auto sum_aligned_manual = std::accumulate(aligned_output.begin(), aligned_output.end(), 0.0);
     std::ranges::fill(aligned_output, 0.0);
 
@@ -125,9 +125,8 @@ int main() {
     const auto sum_auto_const = std::accumulate(output.begin(), output.end(), 0.0);
     std::ranges::fill(output, 0.0);
 
-    bench.run("constexpr manual vectorization (std::array)", [&] {
-      fixed_evaluator(random_points.data(), output.data(), random_points.size());
-    });
+    bench.run("constexpr manual vectorization (std::array)",
+              [&] { fixed_evaluator(random_points.data(), output.data(), random_points.size()); });
     const auto sum_manual_const = std::accumulate(output.begin(), output.end(), 0.0);
     std::ranges::fill(output, 0.0);
 
