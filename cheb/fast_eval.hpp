@@ -118,39 +118,40 @@ class FuncEvalMany {
 
 public:
   using InputType = typename FirstEval::InputType;
+  using OutputType = typename FirstEval::OutputType;
   static_assert((std::is_same_v<typename EvalTypes::InputType, InputType> && ...),
                 "All FuncEval types must have the same InputType");
+  static_assert((std::is_same_v<typename EvalTypes::OutputType, OutputType> && ...),
+                "All FuncEval types must have the same OutputType");
 
-  /// Construct from pre-built evaluators (forwarded/moved)
+  /// Construct from pre-built FuncEval objects
   C20CONSTEXPR explicit FuncEvalMany(EvalTypes... evals)
       : evals_{std::move(evals)...} {}
 
-  /// Number of evaluators in the group
+  /// Number of functions in the group
   [[nodiscard]] constexpr std::size_t size() const noexcept { return sizeof...(EvalTypes); }
 
-  /// Tuple of coefficient buffers
-  constexpr auto coeffs() const {
-    return coeffs_impl(std::make_index_sequence<sizeof...(EvalTypes)>{});
-  }
+  /// Return a tuple of each FuncEval::coeffs()
+  constexpr auto coeffs() const { return coeffs_impl(std::make_index_sequence<sizeof...(EvalTypes)>{}); }
 
   // ---------------------------------------------------------------------------
   // Evaluation APIs
   // ---------------------------------------------------------------------------
 
-  /// Evaluate **all** evaluators at the **same** input value
+  /// Evaluate all functions at a single input, returning tuple
   [[nodiscard]] constexpr auto operator()(InputType arg) const noexcept {
     return eval_impl(arg, std::make_index_sequence<sizeof...(EvalTypes)>{});
   }
 
-  /// Evaluate with one argument *per* evaluator (must pass exactly N args)
+  /// Evaluate with one argument per function (variadic), returning tuple
   template <typename... Args,
-            std::enable_if_t<sizeof...(Args) == sizeof...(EvalTypes) && (std::is_convertible_v<Args, InputType> && ...),
-                             int> = 0>
+            std::enable_if_t<sizeof...(Args) == sizeof...(EvalTypes) &&
+                             (std::is_convertible_v<Args, InputType> && ...), int> = 0>
   [[nodiscard]] constexpr auto operator()(Args&&... args) const noexcept {
     return eval_args_impl(std::make_index_sequence<sizeof...(EvalTypes)>{}, std::forward<Args>(args)...);
   }
 
-  /// Evaluate with a tuple containing exactly N inputs
+  /// Evaluate with tuple of inputs (size N), returning tuple
   template <typename Tuple,
             std::enable_if_t<std::tuple_size_v<std::remove_reference_t<Tuple>> == sizeof...(EvalTypes), int> = 0>
   [[nodiscard]] constexpr auto operator()(Tuple&& tup) const noexcept {
@@ -160,23 +161,37 @@ public:
                       std::forward<Tuple>(tup));
   }
 
+  /// Evaluate with array of inputs (size N), returning std::array
+  [[nodiscard]] constexpr std::array<OutputType, sizeof...(EvalTypes)> operator()
+      (const std::array<InputType, sizeof...(EvalTypes)>& inputs) const noexcept {
+    return eval_array_impl(inputs, std::make_index_sequence<sizeof...(EvalTypes)>{});
+  }
+
 private:
   std::tuple<EvalTypes...> evals_;
 
-  // Evaluate every evaluator with the **same** argument
+  // Helper: evaluate all at same arg into tuple
   template <std::size_t... I>
   constexpr auto eval_impl(InputType arg, std::index_sequence<I...>) const noexcept {
     return std::make_tuple(std::get<I>(evals_)(arg)...);
   }
 
-  // Evaluate each evaluator with its corresponding argument
+  // Helper: evaluate each with its own arg into tuple
   template <std::size_t... I, typename... Args>
   constexpr auto eval_args_impl(std::index_sequence<I...>, Args&&... args) const noexcept {
     auto packed = std::forward_as_tuple(std::forward<Args>(args)...);
     return std::make_tuple(std::get<I>(evals_)(std::get<I>(packed))...);
   }
 
-  // Gather coeff buffers
+  // Helper: evaluate array-input into std::array
+  template <std::size_t... I>
+  constexpr std::array<OutputType, sizeof...(EvalTypes)> eval_array_impl(
+      const std::array<InputType, sizeof...(EvalTypes)>& inputs,
+      std::index_sequence<I...>) const noexcept {
+    return {{ std::get<I>(evals_)(inputs[I])... }};
+  }
+
+  // Helper: gather coeffs into tuple
   template <std::size_t... I>
   constexpr auto coeffs_impl(std::index_sequence<I...>) const {
     return std::make_tuple(std::get<I>(evals_).coeffs()...);

@@ -12,14 +12,15 @@
 int main() {
   // Non-constexpr declarations that do not immediately depend on constexprs
   ankerl::nanobench::Bench bench;
-  std::mt19937 rng{42};
+  volatile unsigned seed = 42;
+  std::mt19937 rng{seed};
 
   // Control flags for benchmark execution
   constexpr bool run_non_constexpr_benchmarks = false;
   constexpr bool run_constexpr_benchmarks = !run_non_constexpr_benchmarks;
 
   // Define the number of points to benchmark
-  constexpr size_t num_points = 1000;
+  constexpr size_t num_points = 1024;
 
   // Data structures for the chosen number of points
   alignas(64) std::array<double, num_points> random_points{};
@@ -42,7 +43,7 @@ int main() {
   std::uniform_real_distribution<double> dist{a, b}; // Depends on 'a' and 'b'
 
   bench.title("Monomial Vectorization Benchmark")
-      .unit("evals")
+      .unit("eval")
       .warmup(1'000)
       .relative(false)
       .minEpochIterations(5'000)

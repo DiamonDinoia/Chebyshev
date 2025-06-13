@@ -20,5 +20,9 @@ int main() {
   auto tresults = group(tuple_args);
   std::cout << "(tuple) sin = " << std::get<0>(tresults) << ", cos = " << std::get<1>(tresults) << '\n';
 
+  const std::array<double, 2> array_args = {x, y};
+  // Array call
+  auto aresults = group(array_args);
+  std::cout << "(array) sin = " << std::get<0>(aresults) << ", cos = " << std::get<1>(aresults) << '\n';
   return 0;
 }
