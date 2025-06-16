@@ -66,7 +66,7 @@ add_executable(bench1d_1d bench1d.cpp)
 target_compile_features(bench1d_1d PRIVATE cxx_std_20)
 target_include_directories(bench1d_1d PRIVATE cheb)
 target_link_libraries(bench1d_1d PRIVATE nanobench::nanobench xsimd)
-target_compile_options(bench1d_1d PRIVATE -march=native -ffast-math)
+target_compile_options(bench1d_1d PRIVATE -march=native)
 
 
 add_executable(bench_many bench_many.cpp)
@@ -83,3 +83,9 @@ add_subdirectory(examples)
 add_executable(bench_estrin bench_estrin.cpp)
 target_compile_features(bench_estrin PRIVATE cxx_std_20)
 target_compile_options(bench_estrin PRIVATE -march=native)
+
+
+add_executable(poly_eval poly_eval.cpp)
+target_compile_features(poly_eval PRIVATE cxx_std_20)
+target_compile_options(poly_eval PRIVATE -march=native)
+target_link_libraries(poly_eval PRIVATE cheb)

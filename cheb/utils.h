@@ -3,6 +3,10 @@
 #include <bit>
 #endif
 #include <cstdint>
+#include <cstddef>
+#include <utility>
+#include <cmath>
+
 #include "macros.h"
 
 
