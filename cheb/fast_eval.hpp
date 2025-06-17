@@ -80,8 +80,8 @@ private:
 
   C20CONSTEXPR void initialize_monomials(Func F, const InputType *pts);
 
-  template <class T> ALWAYS_INLINE constexpr T map_to_domain(T T_arg) const;
-  template <class T> ALWAYS_INLINE constexpr T map_from_domain(T T_arg) const;
+  template <class T> ALWAYS_INLINE constexpr T map_to_domain(T T_arg) const noexcept;
+  template <class T> ALWAYS_INLINE constexpr T map_from_domain(T T_arg) const noexcept;
 
   // Refactored declaration for horner
   constexpr static OutputType horner(const OutputType *c_ptr, std::size_t c_size, InputType x) noexcept;
@@ -99,13 +99,17 @@ private:
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
   void no_inline_horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
-  C20CONSTEXPR static std::vector<OutputType> bjorck_pereyra(const std::vector<InputType> &x,
-                                                             const std::vector<OutputType> &y);
+  C20CONSTEXPR static Buffer<OutputType, N_compile_time>
+  bjorck_pereyra(const Buffer<InputType, N_compile_time>& x,
+                 const Buffer<OutputType, N_compile_time>& y);
 
-  C20CONSTEXPR static std::vector<OutputType> newton_to_monomial(const std::vector<OutputType> &alpha,
-                                                                 const std::vector<InputType> &nodes);
+  C20CONSTEXPR static Buffer<OutputType, N_compile_time>
+  newton_to_monomial(const Buffer<OutputType, N_compile_time>& alpha,
+                     const Buffer<InputType, N_compile_time>& nodes);
 
-  C20CONSTEXPR void refine(const std::vector<InputType> &x_cheb_, const std::vector<OutputType> &y_cheb_);
+  C20CONSTEXPR void
+  refine(const Buffer<InputType, N_compile_time>& x_cheb_,
+         const Buffer<OutputType, N_compile_time>& y_cheb_);
 
   // Friend declaration for FuncEvalMany to access private members
   template <typename... EvalTypes> friend class FuncEvalMany;
