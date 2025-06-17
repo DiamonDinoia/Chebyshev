@@ -37,7 +37,7 @@ int main() {
   constexpr auto degree = 16;
   // Now, declare objects that depend on the above constexprs
   const auto evaluator = poly_eval::make_func_eval(f, degree, a, b);
-  static constexpr auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
+  const auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
 
   // Other non-constexpr declarations that depend on previously defined constexprs
   std::uniform_real_distribution<double> dist{a, b}; // Depends on 'a' and 'b'

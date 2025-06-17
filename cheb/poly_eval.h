@@ -21,7 +21,7 @@ public:
   // Runtime-sized constructor (only when N_compile_time == 0)
   template <std::size_t N = N_compile_time,
             typename = std::enable_if_t<N == 0>>
-  C20CONSTEXPR PolyEval(const T* coeffs, int n)
+  C20CONSTEXPR PolyEval(const T *coeffs, int n)
     : _coeffs(coeffs), _n_terms(n) {
     assert(_n_terms > 0 && "Polynomial degree must be positive");
   }
@@ -29,13 +29,12 @@ public:
   // Compile-time-sized constructor (only when N_compile_time > 0)
   template <std::size_t N = N_compile_time,
             typename = std::enable_if_t<(N > 0)>>
-  C20CONSTEXPR PolyEval(const T* coeffs)
+  C20CONSTEXPR PolyEval(const T *coeffs)
     : _coeffs(coeffs), _n_terms(static_cast<int>(N_compile_time)) {
     static_assert(N_compile_time > 0, "Need compile-time size > 0");
   }
 
   // Single-point Horner evaluation (expects x already in Chebyshev domain)
-  FAST_MATH_BEGIN
   C20CONSTEXPR T eval(T x) const noexcept {
     if constexpr (N_compile_time > 0) {
       return horner<N_compile_time, 0>(_coeffs, x);
@@ -47,18 +46,15 @@ public:
       return acc;
     }
   }
-  FAST_MATH_END
 
   // Scalar call operator delegates to eval
-  FAST_MATH_BEGIN
   C20CONSTEXPR T operator()(T x) const noexcept { return eval(x); }
-  FAST_MATH_END
 
   // Batch evaluation (SIMD + unrolling) - inputs must be pre-mapped
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-  FAST_MATH_BEGIN ALWAYS_INLINE
-  void eval_batch(const T* RESTRICT pts,
-                  T* RESTRICT out,
+  ALWAYS_INLINE
+  void eval_batch(const T * RESTRICT pts,
+                  T * RESTRICT out,
                   std::size_t num_points) const noexcept {
     static_assert(OuterUnrollFactor > 0 && (OuterUnrollFactor & (OuterUnrollFactor - 1)) == 0,
                   "OuterUnrollFactor must be a power of two greater than zero.");
@@ -68,12 +64,16 @@ public:
 
     // Determine aligned modes
     static constexpr auto pts_mode = [] {
-      if constexpr (pts_aligned) return xsimd::aligned_mode{};
-      else                    return xsimd::unaligned_mode{};
+      if constexpr (pts_aligned)
+        return xsimd::aligned_mode{};
+      else
+        return xsimd::unaligned_mode{};
     }();
     static constexpr auto out_mode = [] {
-      if constexpr (out_aligned) return xsimd::aligned_mode{};
-      else                     return xsimd::unaligned_mode{};
+      if constexpr (out_aligned)
+        return xsimd::aligned_mode{};
+      else
+        return xsimd::unaligned_mode{};
     }();
 
     // Process full SIMD+unroll blocks
@@ -109,14 +109,14 @@ public:
       out[i] = eval(pts[i]);
     }
   }
-  FAST_MATH_END
+
 
   // Default batch call operator (uses unaligned, factor=4)
-  FAST_MATH_BEGIN
-  void operator()(const T* in, T* out, std::size_t num_points) const noexcept {
+
+  void operator()(const T *in, T *out, std::size_t num_points) const noexcept {
     eval_batch<4, false, false>(in, out, num_points);
   }
-  FAST_MATH_END
+
 
   // Total coefficient count
   constexpr int size() const noexcept {
@@ -124,35 +124,35 @@ public:
   }
 
 private:
-  const T*  _coeffs;
-  int        _n_terms = N_compile_time;
+  const T *_coeffs;
+  int _n_terms = N_compile_time;
 
   // Recursive Horner for compile-time N
   template <int K_Current, int K_Target, int OuterUnrollFactor>
-  FAST_MATH_BEGIN ALWAYS_INLINE
-  void horner(xsimd::batch<T>* RESTRICT pt_batches,
-              xsimd::batch<T>* RESTRICT acc_batches) const noexcept {
+  ALWAYS_INLINE
+  void horner(xsimd::batch<T> * RESTRICT pt_batches,
+              xsimd::batch<T> * RESTRICT acc_batches) const noexcept {
     if constexpr (K_Current >= K_Target) {
       [&]<std::size_t... J>(std::integer_sequence<std::size_t, J...>) {
         ((acc_batches[J] = xsimd::fma(
-             pt_batches[J], acc_batches[J],
-             xsimd::batch<T>(_coeffs[K_Current]))), ...);
+              pt_batches[J], acc_batches[J],
+              xsimd::batch<T>(_coeffs[K_Current]))), ...);
       }(std::make_integer_sequence<std::size_t, OuterUnrollFactor>{});
-      horner<K_Current-1, K_Target, OuterUnrollFactor>(pt_batches, acc_batches);
+      horner<K_Current - 1, K_Target, OuterUnrollFactor>(pt_batches, acc_batches);
     }
   }
-  FAST_MATH_END
+
 
   // Compile-time scalar Horner
   template <std::size_t N_total, std::size_t idx>
-  FAST_MATH_BEGIN constexpr T horner(const T* RESTRICT c_ptr, T x) const noexcept {
-    if constexpr (idx == N_total-1) {
+  constexpr T horner(const T * RESTRICT c_ptr, T x) const noexcept {
+    if constexpr (idx == N_total - 1) {
       return c_ptr[idx];
     } else {
-      return std::fma(horner<N_total, idx+1>(c_ptr, x), x, c_ptr[idx]);
+      return std::fma(horner<N_total, idx + 1>(c_ptr, x), x, c_ptr[idx]);
     }
   }
-  FAST_MATH_END
+
 };
 
 } // namespace poly_eval

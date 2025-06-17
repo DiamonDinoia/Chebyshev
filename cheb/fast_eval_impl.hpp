@@ -35,7 +35,7 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 template <std::size_t CurrentN, typename>
 C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, const int n, const InputType a,
                                                                           const InputType b, const InputType *pts)
-    : n_terms(n), low(b - a), hi(b + a) {
+    : n_terms(n), low(InputType(1)/(b - a)), hi(b + a) {
   assert(n_terms > 0 && "Polynomial degree must be positive");
   monomials.resize(n_terms);
   initialize_monomials(F, pts);
@@ -45,10 +45,11 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 template <std::size_t CurrentN, typename>
 C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, const InputType a, const InputType b,
                                                                           const InputType *pts)
-    : n_terms(static_cast<int>(CurrentN)), low(b - a), hi(b + a) {
+    : n_terms(static_cast<int>(CurrentN)), low(InputType(1)/(b - a)), hi(b + a) {
   assert(n_terms > 0 && "Polynomial degree must be positive (template N > 0)");
   initialize_monomials(F, pts);
 }
+
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
  typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType C20CONSTEXPR
@@ -56,7 +57,6 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType p
   const auto xi = map_from_domain(pt);
   return horner(monomials.data(), monomials.size(), xi); // Pass data pointer and size
 }
-
 
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
@@ -161,7 +161,6 @@ template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
 }
 
 
-
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <bool pts_aligned, bool out_aligned>
 void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType *RESTRICT pts, OutputType *RESTRICT out,
@@ -202,8 +201,6 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputT
   }
 }
 
-
-
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 C20CONSTEXPR const Buffer<typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType, N_compile_time> &
 FuncEval<Func, N_compile_time, Iters_compile_time>::coeffs() const noexcept {
@@ -233,13 +230,13 @@ C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <class T>
  constexpr T FuncEval<Func, N_compile_time, Iters_compile_time>::map_to_domain(const T T_arg) const {
-  return static_cast<T>(0.5 * (low * T_arg + hi));
+  return static_cast<T>(0.5 * (T_arg/low + hi));
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <class T>
 constexpr T FuncEval<Func, N_compile_time, Iters_compile_time>::map_from_domain(const T T_arg) const {
-  return static_cast<T>((2.0 * T_arg - hi) / low);
+  return static_cast<T>((2.0 * T_arg - hi) * low);
 }
 
 
