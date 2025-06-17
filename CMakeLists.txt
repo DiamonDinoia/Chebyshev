@@ -33,9 +33,16 @@ CPMAddPackage(
 )
 
 CPMAddPackage(
+        NAME xtl
+        GITHUB_REPOSITORY xtensor-stack/xtl
+        GIT_TAG 0.7.0
+)
+
+CPMAddPackage(
         NAME xsimd
         GITHUB_REPOSITORY xtensor-stack/xsimd
         GIT_TAG 13.2.0
+        OPTIONS "ENABLE_XTL_COMPLEX ON"
 )
 
 CPMAddPackage(
@@ -48,6 +55,7 @@ CPMAddPackage(
 add_library(cheb INTERFACE)
 target_include_directories(cheb INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cheb)
 target_link_libraries(cheb INTERFACE xsimd)
+#target_compile_definitions(cheb INTERFACE -DXSIMD_ENABLE_XTL_COMPLEX=1)
 # ─────────────────────────────────────────────
 # Build executable
 add_executable(chebyshev_nd main.cpp)
@@ -74,6 +82,12 @@ target_compile_features(bench_many PRIVATE cxx_std_20)
 target_include_directories(bench_many PRIVATE cheb)
 target_link_libraries(bench_many PRIVATE nanobench::nanobench xsimd)
 target_compile_options(bench_many PRIVATE -march=native)
+
+add_executable(bench_complex bench_complex.cpp)
+target_compile_features(bench_complex PRIVATE cxx_std_20)
+target_include_directories(bench_complex PRIVATE cheb)
+target_link_libraries(bench_complex PRIVATE nanobench::nanobench xsimd)
+target_compile_options(bench_complex PRIVATE -march=native)
 
 add_executable(chebgrid_1d cheb_grid_1d.cpp)
 target_compile_features(chebgrid_1d PRIVATE cxx_std_20)

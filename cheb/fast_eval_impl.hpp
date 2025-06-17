@@ -35,7 +35,7 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 template <std::size_t CurrentN, typename>
 C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, const int n, const InputType a,
                                                                           const InputType b, const InputType *pts)
-  : n_terms(n), low(InputType(1) / (b - a)), hi(b + a) {
+    : n_terms(n), low(InputType(1) / (b - a)), hi(b + a) {
   assert(n_terms > 0 && "Polynomial degree must be positive");
   monomials.resize(n_terms);
   initialize_monomials(F, pts);
@@ -45,11 +45,10 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 template <std::size_t CurrentN, typename>
 C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F, const InputType a, const InputType b,
                                                                           const InputType *pts)
-  : n_terms(static_cast<int>(CurrentN)), low(InputType(1) / (b - a)), hi(b + a) {
+    : n_terms(static_cast<int>(CurrentN)), low(InputType(1) / (b - a)), hi(b + a) {
   assert(n_terms > 0 && "Polynomial degree must be positive (template N > 0)");
   initialize_monomials(F, pts);
 }
-
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType C20CONSTEXPR
@@ -57,7 +56,6 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType p
   const auto xi = map_from_domain(pt);
   return horner(monomials.data(), monomials.size(), xi); // Pass data pointer and size
 }
-
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <int K_Current, int K_Target, int OuterUnrollFactor, class VecInputType, class VecOutputType>
@@ -72,26 +70,38 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::horner(VecInputType *RESTRIC
     // Inner loop unrolling for 'j' (OuterUnrollFactor)
     // This uses a C++17 generic lambda with a fold expression to unroll the inner loop
     // for each batch within the current unroll factor.
-    [&]<std::size_t... J>(std::integer_sequence<std::size_t, J...>) {
-      ((
-          // Apply Horner's method: acc = pt * acc + monomials[K_Current]
-          // monomials is now accessed implicitly via the 'this' pointer
-          acc_batches[J] = xsimd::fma(pt_batches[J], acc_batches[J], xsimd::batch<OutputType>(monomials[K_Current]))),
-        ...); // Fold expression applies the operation for each J in the sequence
-    }(std::make_integer_sequence<std::size_t, OuterUnrollFactor>{});
-
+    if constexpr (std::is_floating_point_v<OutputType>) {
+      [&]<std::size_t... J>(std::integer_sequence<std::size_t, J...>) {
+        ((
+             // Apply Horner's method: acc = pt * acc + monomials[K_Current]
+             // monomials is now accessed implicitly via the 'this' pointer
+             acc_batches[J] =
+                 xsimd::fma(pt_batches[J], acc_batches[J], xsimd::batch<OutputType>(monomials[K_Current]))),
+         ...); // Fold expression applies the operation for each J in the sequence
+      }(std::make_integer_sequence<std::size_t, OuterUnrollFactor>{});
+    } else {
+      [&]<std::size_t... J>(std::integer_sequence<std::size_t, J...>) {
+        ((
+             // Apply Horner's method: acc = pt * acc + monomials[K_Current]
+             // monomials is now accessed implicitly via the 'this' pointer
+             acc_batches[J] = {xsimd::fma(pt_batches[J], real(acc_batches[J]),
+                                          real(xsimd::batch<OutputType>(monomials[K_Current]))),
+                               xsimd::fma(pt_batches[J], imag(acc_batches[J]),
+                                          imag(xsimd::batch<OutputType>(monomials[K_Current])))}),
+         ...); // Fold expression applies the operation for each J in the sequence
+      }(std::make_integer_sequence<std::size_t, OuterUnrollFactor>{});
+    }
     // Recursive call to process the next coefficient (k-1)
     horner<K_Current - 1, K_Target, OuterUnrollFactor>(pt_batches, acc_batches);
   }
 }
-
 
 // Batch evaluation implementation using SIMD and unrolling
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
 ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_polyeval(
     const InputType *RESTRICT pts, OutputType *RESTRICT out, std::size_t num_points) const noexcept {
-
+  static_assert(std::is_same_v<OutputType, std::complex<InputType>>);
   static_assert(OuterUnrollFactor > 0 && (OuterUnrollFactor & (OuterUnrollFactor - 1)) == 0,
                 "OuterUnrollFactor must be a power of two greater than zero.");
   static constexpr auto simd_size = xsimd::batch<InputType>::size;
@@ -118,7 +128,6 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_po
     // Use arrays to hold the batches and accumulators
     xsimd::batch<InputType> pt_batches[OuterUnrollFactor];
     xsimd::batch<OutputType> acc_batches[OuterUnrollFactor];
-
     // Load input points and initialize accumulators in a loop
     detail::unroll_loop<OuterUnrollFactor>([&](const auto j) {
       // Ensure we don't read past num_points for partial blocks
@@ -135,21 +144,27 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_po
       for (int k = monomials_size - 2; k >= 0; --k) {
         detail::unroll_loop<OuterUnrollFactor>([&](const auto j) {
           // acc_batches[j] = pt_batches[j] * acc_batches[j] + monomials_ptr[k]
-          acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(monomials_ptr[k]));
+          if constexpr (std::is_floating_point_v<OutputType>) {
+            acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(monomials_ptr[k]));
+          } else {
+            const auto coeffs = xsimd::batch<OutputType>(monomials_ptr[k]);
+            acc_batches[j] = {xsimd::fma(pt_batches[j], real(acc_batches[j]), real(coeffs)),
+                              xsimd::fma(pt_batches[j], imag(acc_batches[j]), imag(coeffs))};
+          }
         });
       }
     }
 
     // Store results in a loop
     detail::unroll_loop<OuterUnrollFactor>(
-        [&](const auto j) { xsimd::store(out + i + j * simd_size, acc_batches[j], out_aligment); });
+
+        [&](const auto j) { acc_batches[j].store(out + i + j * simd_size, out_aligment); });
   }
   // Handle any remaining points that didn't fit into the full unrolled blocks
   for (int i = trunc_size; i < num_points; ++i) {
     out[i] = operator()(pts[i]);
   }
 }
-
 
 // Batch evaluation implementation using SIMD and unrolling
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
@@ -159,7 +174,6 @@ NO_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::no_inline_hor
   return horner_polyeval<OuterUnrollFactor, pts_aligned, out_aligned>(pts, out, num_points);
 }
 
-
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <bool pts_aligned, bool out_aligned>
 void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType *RESTRICT pts,
@@ -168,7 +182,7 @@ void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputT
   // find out the alignment of pts and out
   constexpr auto simd_size = xsimd::batch<InputType>::size;
   constexpr auto alignment = xsimd::best_arch::alignment();
-  constexpr auto unroll_factor = 4;
+  constexpr auto unroll_factor = std::is_floating_point_v<OutputType> ? 4 : 2;
 
   const auto monomial_ptr = monomials.data();
   const auto monomial_size = monomials.size();
@@ -219,37 +233,36 @@ constexpr T FuncEval<Func, N_compile_time, Iters_compile_time>::map_from_domain(
   return static_cast<T>((2.0 * T_arg - hi) * low);
 }
 
-
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <std::size_t N_total, std::size_t current_idx>
-typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
-constexpr FuncEval<Func, N_compile_time, Iters_compile_time>::horner(
-    const OutputType *RESTRICT c_ptr, InputType x) noexcept {
+typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr FuncEval<
+    Func, N_compile_time, Iters_compile_time>::horner(const OutputType *RESTRICT c_ptr, InputType x) noexcept {
   if constexpr (current_idx == N_total - 1) {
     return c_ptr[current_idx];
   } else {
-    if constexpr (std::is_same_v<InputType, OutputType> && std::is_floating_point_v<InputType>) {
+    if constexpr (std::is_floating_point_v<OutputType>) {
       return std::fma(horner<N_total, current_idx + 1>(c_ptr, x), x, c_ptr[current_idx]);
     } else {
-      return horner<N_total, current_idx + 1>(c_ptr, x) * x + c_ptr[current_idx];
+      const auto rec_call = horner<N_total, current_idx + 1>(c_ptr, x);
+      return {std::fma(real(rec_call), x, real(c_ptr[current_idx])),
+              std::fma(imag(rec_call), x, imag(c_ptr[current_idx]))};
     }
   }
 }
 
-
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType
-constexpr FuncEval<Func, N_compile_time, Iters_compile_time>::horner(
-    const OutputType *RESTRICT c_ptr, std::size_t c_size, InputType x) noexcept {
+typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr FuncEval<
+    Func, N_compile_time, Iters_compile_time>::horner(const OutputType *RESTRICT c_ptr, std::size_t c_size,
+                                                      InputType x) noexcept {
   if constexpr (N_compile_time != 0) {
     return horner<N_compile_time, 0>(c_ptr, x); // Use compile-time N
   } else {
     OutputType acc = c_ptr[c_size - 1]; // Start with the highest degree coefficient
     for (int k = static_cast<int>(c_size) - 2; k >= 0; --k) {
-      if constexpr (std::is_same_v<InputType, OutputType> && std::is_floating_point_v<InputType>) {
+      if constexpr (std::is_floating_point_v<OutputType>) {
         acc = xsimd::fma(x, acc, c_ptr[k]);
       } else {
-        acc = acc * x + c_ptr[k];
+        acc = {xsimd::fma(x, real(acc), real(c_ptr[k])), xsimd::fma(x, imag(acc), imag(c_ptr[k]))};
       }
     }
     return acc;
@@ -257,9 +270,8 @@ constexpr FuncEval<Func, N_compile_time, Iters_compile_time>::horner(
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-C20CONSTEXPR void
-FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_monomials(Func F,
-                                                                         const InputType *pts) {
+C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_monomials(Func F,
+                                                                                           const InputType *pts) {
   // 1) allocate
   Buffer<InputType, N_compile_time> grid;
   if constexpr (N_compile_time == 0)
@@ -271,10 +283,7 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_monomials(Func F,
 
   // 2) fill
   for (std::size_t k = 0; k < n_terms; ++k) {
-    grid[k] = pts
-                ? pts[k]
-                : static_cast<InputType>(
-                  detail::cos((2.0 * k + 1.0) * M_PI / (2.0 * n_terms)));
+    grid[k] = pts ? pts[k] : InputType(detail::cos((2.0 * InputType(k) + 1.0) * M_PI / (2.0 * n_terms)));
   }
   for (std::size_t i = 0; i < n_terms; ++i) {
     samples[i] = F(map_to_domain(grid[i]));
@@ -283,24 +292,19 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_monomials(Func F,
   // 3) compute Newton → monomial
   auto newton = bjorck_pereyra(grid, samples);
   auto temp_monomial = newton_to_monomial(newton, grid);
-  assert(temp_monomial.size() == monomials.size()
-      && "size mismatch!");
+  assert(temp_monomial.size() == monomials.size() && "size mismatch!");
 
-  std::copy(temp_monomial.begin(),
-            temp_monomial.end(),
-            monomials.begin());
+  std::copy(temp_monomial.begin(), temp_monomial.end(), monomials.begin());
 
   // 4) optional refine
   refine(grid, samples);
 }
 
-
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 C20CONSTEXPR auto
-FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(
-    const Buffer<InputType, N_compile_time> &x,
-    const Buffer<OutputType, N_compile_time> &y)
-  -> Buffer<OutputType, N_compile_time> {
+FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(const Buffer<InputType, N_compile_time> &x,
+                                                                   const Buffer<OutputType, N_compile_time> &y)
+    -> Buffer<OutputType, N_compile_time> {
   const std::size_t n = (N_compile_time == 0 ? x.size() : N_compile_time);
   // copy into working buffer
   Buffer<OutputType, N_compile_time> a = y;
@@ -311,63 +315,58 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(
   // divided‐difference
   for (std::size_t k = 0; k + 1 < n; ++k) {
     for (std::size_t i = n - 1; i >= k + 1; --i) {
-      a[i] = (a[i] - a[i - 1]) /
-             static_cast<OutputType>(x[i] - x[i - k - 1]);
+      a[i] = (a[i] - a[i - 1]) / static_cast<OutputType>(x[i] - x[i - k - 1]);
     }
   }
   return a;
 }
 
-
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 C20CONSTEXPR auto
-FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(
-    const Buffer<OutputType, N_compile_time> &alpha,
-    const Buffer<InputType, N_compile_time> &nodes)
-  -> Buffer<OutputType, N_compile_time> {
+FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(const Buffer<OutputType, N_compile_time> &alpha,
+                                                                       const Buffer<InputType, N_compile_time> &nodes)
+    -> Buffer<OutputType, N_compile_time> {
   // temporarily do pushes in a vector, then copy back
-  std::vector<OutputType> c_temp{static_cast<OutputType>(0.0)};
   int n = static_cast<int>(alpha.size());
-  for (int i = n - 1; i >= 0; --i) {
-    c_temp.push_back(static_cast<OutputType>(0.0));
-    for (int j = static_cast<int>(c_temp.size()) - 1; j >= 1; --j) {
-      c_temp[j] =
-          c_temp[j - 1] - static_cast<OutputType>(nodes[i]) * c_temp[j];
-    }
-    c_temp[0] = -static_cast<OutputType>(nodes[i]) * c_temp[0] + alpha[i];
-  }
-  if ((int)c_temp.size() > n)
-    c_temp.resize(n);
-
-  // copy into Buffer
-  Buffer<OutputType, N_compile_time> c;
+  // Build coefficient buffer using Buffer instead of std::vector
+  Buffer<OutputType, N_compile_time> c{0}; // zero-initialized for static size
   if constexpr (N_compile_time == 0) {
-    c = std::move(c_temp);
-  } else {
-    for (int i = 0; i < n; ++i)
-      c[i] = c_temp[i];
+    c.reserve(n);
+    c.push_back(static_cast<OutputType>(0.0)); // start with constant term = 0
+  }
+  std::size_t deg = 0;
+  for (int i = n - 1; i >= 0; --i) {
+    ++deg;
+    if constexpr (N_compile_time == 0) {
+      c.push_back(static_cast<OutputType>(0.0)); // extend for dynamic
+    }
+    for (int j = static_cast<int>(deg); j >= 1; --j) {
+      c[j] = c[j - 1] - static_cast<OutputType>(nodes[i]) * c[j];
+    }
+    c[0] = -static_cast<OutputType>(nodes[i]) * c[0] + alpha[i];
+  }
+  if constexpr (N_compile_time == 0) {
+    if (static_cast<int>(c.size()) > n)
+      c.resize(n);
   }
   return c;
 }
 
-
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 C20CONSTEXPR void
-FuncEval<Func, N_compile_time, Iters_compile_time>::refine(
-    const Buffer<InputType, N_compile_time> &x_cheb_,
-    const Buffer<OutputType, N_compile_time> &y_cheb_) {
+FuncEval<Func, N_compile_time, Iters_compile_time>::refine(const Buffer<InputType, N_compile_time> &x_cheb_,
+                                                           const Buffer<OutputType, N_compile_time> &y_cheb_) {
 
   for (std::size_t pass = 0; pass < Iters_compile_time; ++pass) {
     // residuals
     Buffer<OutputType, N_compile_time> r_cheb;
-    if constexpr (N_compile_time == 0)
+    if constexpr (N_compile_time == 0) {
       r_cheb.resize(n_terms);
+    }
 
     for (std::size_t i = 0; i < n_terms; ++i) {
       auto xi = x_cheb_[i];
-      auto p_val = horner(monomials.data(),
-                          monomials.size(),
-                          xi);
+      auto p_val = horner(monomials.data(), monomials.size(), xi);
       r_cheb[i] = y_cheb_[i] - p_val;
     }
 
@@ -380,7 +379,6 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::refine(
     }
   }
 }
-
 
 // -----------------------------------------------------------------------------
 // make_func_eval API implementations (Runtime, C++17 compatible)
@@ -416,19 +414,19 @@ NO_INLINE C20CONSTEXPR auto make_func_eval(Func F, double eps, // eps as a runti
     if constexpr (std::is_floating_point_v<OutputType>) {
       if (eps < std::numeric_limits<OutputType>::epsilon()) {
         std::cerr << "Warning: Requested epsilon " << eps << " is less than machine epsilon for OutputType ("
-            << std::numeric_limits<OutputType>::epsilon() << "). Clamping.\n";
+                  << std::numeric_limits<OutputType>::epsilon() << "). Clamping.\n";
         eps = std::numeric_limits<OutputType>::epsilon();
       }
     } else if constexpr (std::is_same_v<OutputType, std::complex<float>>) {
       if (eps < std::numeric_limits<float>::epsilon()) {
         std::cerr << "Warning: Requested epsilon " << eps << " is less than machine epsilon for std::complex<float> ("
-            << std::numeric_limits<float>::epsilon() << "). Clamping.\n";
+                  << std::numeric_limits<float>::epsilon() << "). Clamping.\n";
         eps = std::numeric_limits<float>::epsilon();
       }
     } else if constexpr (std::is_same_v<OutputType, std::complex<double>>) {
       if (eps < std::numeric_limits<double>::epsilon()) {
         std::cerr << "Warning: Requested epsilon " << eps << " is less than machine epsilon for std::complex<double> ("
-            << std::numeric_limits<double>::epsilon() << "). Clamping.\n";
+                  << std::numeric_limits<double>::epsilon() << "). Clamping.\n";
         eps = std::numeric_limits<double>::epsilon();
       }
     }
@@ -442,19 +440,19 @@ NO_INLINE C20CONSTEXPR auto make_func_eval(Func F, double eps, // eps as a runti
     for (const auto &pt : eval_points) {
       OutputType actual_val = F(pt);
       OutputType poly_val = current_evaluator(pt);
-      double current_abs_error = std::abs(1.0 - std::abs(poly_val / actual_val));
+      double current_abs_error = std::abs(1.0 - poly_val / actual_val);
       if (current_abs_error > max_observed_error) {
         max_observed_error = current_abs_error;
       }
     }
     if (max_observed_error <= eps) {
       std::cout << "Converged: Found min degree N = " << n << " (Max Error: " << std::scientific << std::setprecision(4)
-          << max_observed_error << " <= Epsilon: " << eps << ")\n";
+                << max_observed_error << " <= Epsilon: " << eps << ")\n";
       return current_evaluator;
     }
   }
   std::cout << "Warning: Did not converge to epsilon " << std::scientific << std::setprecision(4) << eps
-      << " within MaxN = " << MaxN_val << ". Returning FuncEval with degree " << MaxN_val << ".\n";
+            << " within MaxN = " << MaxN_val << ". Returning FuncEval with degree " << MaxN_val << ".\n";
   return FuncEval<Func, 0, Iters_compile_time>(F, static_cast<int>(MaxN_val), a, b);
 }
 
@@ -486,22 +484,20 @@ NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::
 
     if (max_observed_error <= eps_val) {
       std::cout << "Converged: Found min degree N = " << n << " (Max Error: " << std::scientific << std::setprecision(4)
-          << max_observed_error << " <= Epsilon: " << eps_val << ")\n";
+                << max_observed_error << " <= Epsilon: " << eps_val << ")\n";
       return current_evaluator;
     }
   }
 
   std::cout << "Warning: Did not converge to epsilon " << std::scientific << std::setprecision(4) << eps_val
-      << " within MaxN = " << MaxN_val << ". Returning FuncEval with degree " << MaxN_val << ".\n";
+            << " within MaxN = " << MaxN_val << ". Returning FuncEval with degree " << MaxN_val << ".\n";
   return FuncEval<Func, 0, Iters_compile_time>(F, static_cast<int>(MaxN_val), a, b);
 }
 #endif
-
 
 template <typename... EvalTypes>
 C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval_many(EvalTypes... evals) noexcept {
   return FuncEvalMany<EvalTypes...>(std::move(evals)...);
 }
-
 
 } // namespace poly_eval
