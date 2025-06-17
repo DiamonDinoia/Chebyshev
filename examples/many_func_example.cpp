@@ -6,7 +6,7 @@ int main() {
   const auto cos = poly_eval::make_func_eval([](double x) { return std::cos(x); }, 16, -1.0, 1.0);
 
   // Group them via the maker function
-  const auto group = poly_eval::make_func_eval_many(sin, cos);
+  const auto group = poly_eval::make_func_eval(sin, cos);
 
   double x = 4.0;
   double y = 2.0;

@@ -101,7 +101,6 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
 ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_polyeval(
     const InputType *RESTRICT pts, OutputType *RESTRICT out, std::size_t num_points) const noexcept {
-  static_assert(std::is_same_v<OutputType, std::complex<InputType>>);
   static_assert(OuterUnrollFactor > 0 && (OuterUnrollFactor & (OuterUnrollFactor - 1)) == 0,
                 "OuterUnrollFactor must be a power of two greater than zero.");
   static constexpr auto simd_size = xsimd::batch<InputType>::size;
@@ -278,11 +277,11 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize_monomials(Func F,
                                                                                            const InputType *pts) {
   // 1) allocate
-  Buffer<InputType, N_compile_time> grid;
+  Buffer<InputType, N_compile_time> grid{};
   if constexpr (N_compile_time == 0)
     grid.resize(n_terms);
 
-  Buffer<OutputType, N_compile_time> samples;
+  Buffer<OutputType, N_compile_time> samples{};
   if constexpr (N_compile_time == 0)
     samples.resize(n_terms);
 
@@ -481,7 +480,7 @@ NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::
     for (const auto &pt : eval_points) {
       OutputType actual_val = F(pt);
       OutputType poly_val = current_evaluator(pt);
-      double current_abs_error = std::abs(1.0 - std::abs(poly_val / actual_val));
+      double current_abs_error = std::abs(1.0 - poly_val / actual_val);
       if (current_abs_error > max_observed_error) {
         max_observed_error = current_abs_error;
       }
@@ -501,7 +500,7 @@ NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::
 #endif
 
 template <typename... EvalTypes>
-C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval_many(EvalTypes... evals) noexcept {
+C20CONSTEXPR FuncEvalMany<EvalTypes...>  make_func_eval(EvalTypes... evals) noexcept {
   return FuncEvalMany<EvalTypes...>(std::move(evals)...);
 }
 
