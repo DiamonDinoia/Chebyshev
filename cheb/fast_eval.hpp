@@ -83,7 +83,6 @@ private:
   template <class T> ALWAYS_INLINE constexpr T map_to_domain(T T_arg) const noexcept;
   template <class T> ALWAYS_INLINE constexpr T map_from_domain(T T_arg) const noexcept;
 
-  // Refactored declaration for horner
   constexpr static OutputType horner(const OutputType *c_ptr, std::size_t c_size, InputType x) noexcept;
 
   template <std::size_t N_total, std::size_t current_idx>

@@ -32,17 +32,11 @@ CPMAddPackage(
         GIT_TAG refactor-cmake
 )
 
-CPMAddPackage(
-        NAME xtl
-        GITHUB_REPOSITORY xtensor-stack/xtl
-        GIT_TAG 0.7.0
-)
 
 CPMAddPackage(
         NAME xsimd
         GITHUB_REPOSITORY xtensor-stack/xsimd
         GIT_TAG 13.2.0
-        OPTIONS "ENABLE_XTL_COMPLEX ON"
 )
 
 CPMAddPackage(
@@ -55,7 +49,6 @@ CPMAddPackage(
 add_library(cheb INTERFACE)
 target_include_directories(cheb INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cheb)
 target_link_libraries(cheb INTERFACE xsimd)
-#target_compile_definitions(cheb INTERFACE -DXSIMD_ENABLE_XTL_COMPLEX=1)
 # ─────────────────────────────────────────────
 # Build executable
 add_executable(chebyshev_nd main.cpp)

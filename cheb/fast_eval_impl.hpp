@@ -51,7 +51,7 @@ C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType C20CONSTEXPR
+typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType C20CONSTEXPR ALWAYS_INLINE
 FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType pt) const noexcept {
   const auto xi = map_from_domain(pt);
   return horner(monomials.data(), monomials.size(), xi); // Pass data pointer and size
@@ -127,13 +127,13 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_po
   for (std::size_t i = 0; i < trunc_size; i += simd_size * OuterUnrollFactor) {
     // Use arrays to hold the batches and accumulators
     xsimd::batch<InputType> pt_batches[OuterUnrollFactor];
-    xsimd::batch<OutputType> acc_batches[OuterUnrollFactor];
+    xsimd::batch<OutputType> acc_batches[OuterUnrollFactor]{
+        xsimd::batch<OutputType>(monomials_ptr[monomials_size - 1])};
     // Load input points and initialize accumulators in a loop
     detail::unroll_loop<OuterUnrollFactor>([&](const auto j) {
       // Ensure we don't read past num_points for partial blocks
       pt_batches[j] = map_from_domain(xsimd::load(pts + i + j * simd_size, pts_aligment));
       // Initialize with the last coefficient
-      acc_batches[j] = xsimd::batch<OutputType>(monomials_ptr[monomials_size - 1]);
     });
 
     // Process each batch in the inner loop (Horner's method)
@@ -176,9 +176,9 @@ NO_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::no_inline_hor
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <bool pts_aligned, bool out_aligned>
-void FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType *RESTRICT pts,
-                                                                    OutputType *RESTRICT out,
-                                                                    std::size_t num_points) const noexcept {
+ALWAYS_INLINE void
+FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType *RESTRICT pts, OutputType *RESTRICT out,
+                                                               std::size_t num_points) const noexcept {
   // find out the alignment of pts and out
   constexpr auto simd_size = xsimd::batch<InputType>::size;
   constexpr auto alignment = xsimd::best_arch::alignment();
@@ -223,19 +223,24 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::coeffs() const noexcept {
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <class T>
-constexpr T FuncEval<Func, N_compile_time, Iters_compile_time>::map_to_domain(const T T_arg) const noexcept {
+ALWAYS_INLINE constexpr T
+FuncEval<Func, N_compile_time, Iters_compile_time>::map_to_domain(const T T_arg) const noexcept {
   return static_cast<T>(0.5 * (T_arg / low + hi));
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <class T>
-constexpr T FuncEval<Func, N_compile_time, Iters_compile_time>::map_from_domain(const T T_arg) const noexcept {
-  return static_cast<T>((2.0 * T_arg - hi) * low);
+ALWAYS_INLINE constexpr T
+FuncEval<Func, N_compile_time, Iters_compile_time>::map_from_domain(const T T_arg) const noexcept {
+  if (std::is_constant_evaluated()) {
+    return static_cast<T>((2.0 * T_arg - hi) * low);
+  }
+  return static_cast<T>(xsimd::fms(T(2.0), T_arg, T(hi)) * low);
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <std::size_t N_total, std::size_t current_idx>
-typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr FuncEval<
+ALWAYS_INLINE typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr FuncEval<
     Func, N_compile_time, Iters_compile_time>::horner(const OutputType *RESTRICT c_ptr, InputType x) noexcept {
   if constexpr (current_idx == N_total - 1) {
     return c_ptr[current_idx];
@@ -251,7 +256,7 @@ typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexp
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr FuncEval<
+ALWAYS_INLINE typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr FuncEval<
     Func, N_compile_time, Iters_compile_time>::horner(const OutputType *RESTRICT c_ptr, std::size_t c_size,
                                                       InputType x) noexcept {
   if constexpr (N_compile_time != 0) {
