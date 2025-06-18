@@ -1,18 +1,41 @@
 #pragma once
-#if __cplusplus >= 202002L // Check for C++20 or later
+#if defined(__cpp_lib_bitops) && (__cpp_lib_bitops >= 201907L)
 #include <bit>
 #endif
-#include <cstdint>
-#include <cstddef>
-#include <utility>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <utility>
 
 #include "macros.h"
 
-
 namespace poly_eval::detail {
-template <typename T>
-ALWAYS_INLINE static constexpr size_t get_alignment(const T *ptr) noexcept {
+
+// std::countr_zero returns the number of trailing zero bits.
+// If an address is N-byte aligned, its N lowest bits must be zero.
+// So, if an address is 8-byte aligned (e.g., 0x...1000), it has 3 trailing zeros.
+// 2^3 = 8.
+template <typename T> ALWAYS_INLINE constexpr auto countr_zero(const T x) noexcept {
+  static_assert(std::is_unsigned_v<T>, "cntz requires an unsigned integral type");
+  static_assert(std::is_unsigned<T>::value, "countr_zero_impl requires an unsigned type");
+#if defined(__cpp_lib_bitops) && (__cpp_lib_bitops >= 201907L)
+  // C++20: hand work to the standard library
+  return std::countr_zero(x);
+#else
+  // constexpr portable fallback
+  constexpr int w = std::numeric_limits<UInt>::digits;
+  if (x == 0)
+    return w;
+  int n = 0;
+  while ((x & UInt{1}) == UInt{0}) {
+    x >>= 1;
+    ++n;
+  }
+  return n;
+#endif
+}
+
+template <typename T> ALWAYS_INLINE constexpr size_t get_alignment(const T *ptr) noexcept {
   const auto address = reinterpret_cast<uintptr_t>(ptr);
 
   if (address == 0) {
@@ -22,21 +45,7 @@ ALWAYS_INLINE static constexpr size_t get_alignment(const T *ptr) noexcept {
     return 0;
   }
   // Modern C++ (C++20 and later) has built-in functions for this
-#if __cplusplus >= 202002L // Check for C++20 or later
-  // std::countr_zero returns the number of trailing zero bits.
-  // If an address is N-byte aligned, its N lowest bits must be zero.
-  // So, if an address is 8-byte aligned (e.g., 0x...1000), it has 3 trailing zeros.
-  // 2^3 = 8.
-  return static_cast<size_t>(1) << std::countr_zero(address);
-#else
-  // For older C++ versions, we can use a loop or compiler intrinsics.
-  // This loop finds the least significant '1' bit, which determines the alignment.
-  size_t alignment = 1;
-  while ((address & alignment) == 0 && (alignment < (static_cast<size_t>(1) << (sizeof(uintptr_t) * 8 - 1)))) {
-    alignment <<= 1; // Multiply by 2
-  }
-  return alignment;
-#endif
+  return static_cast<size_t>(1) << detail::countr_zero(address);
 }
 
 template <typename F, std::size_t... Is>
@@ -44,11 +53,9 @@ ALWAYS_INLINE constexpr void unroll_loop_impl(F &&func, std::index_sequence<Is..
   (func(Is), ...); // C++17 fold expression for comma operator
 }
 
-template <std::size_t Count, typename F>
-ALWAYS_INLINE constexpr void unroll_loop(F &&func) {
+template <std::size_t Count, typename F> ALWAYS_INLINE constexpr void unroll_loop(F &&func) {
   unroll_loop_impl(std::forward<F>(func), std::make_index_sequence<Count>{});
 }
-
 
 constexpr double cos(const double x) noexcept {
   /* π/2 split (Cody-Waite) */
@@ -71,17 +78,17 @@ constexpr double cos(const double x) noexcept {
   }();
   /* cos & sin minimax polynomials as lambdas with embedded coeffs */
   constexpr auto cos_poly = [](const double yy) constexpr {
-   /*
-    * The coefficients c1-c6 are under the following license:
-    * ====================================================
-    * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
-    *
-    * Developed at SunSoft, a Sun Microsystems, Inc. business.
-    * Permission to use, copy, modify, and distribute this
-    * software is freely granted, provided that this notice
-    * is preserved.
-    * ====================================================
-    */
+    /*
+     * The coefficients c1-c6 are under the following license:
+     * ====================================================
+     * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+     *
+     * Developed at SunSoft, a Sun Microsystems, Inc. business.
+     * Permission to use, copy, modify, and distribute this
+     * software is freely granted, provided that this notice
+     * is preserved.
+     * ====================================================
+     */
     constexpr double c1 = 4.16666666666666019037e-02;
     constexpr double c2 = -1.38888888888741095749e-03;
     constexpr double c3 = 2.48015872894767294178e-05;
@@ -126,4 +133,4 @@ constexpr double cos(const double x) noexcept {
   }
 }
 
-}
+} // namespace poly_eval::detail

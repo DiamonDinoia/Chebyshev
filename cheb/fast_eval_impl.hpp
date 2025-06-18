@@ -205,12 +205,15 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType *
       return no_inline_horner_polyeval<unroll_factor, false, false>(pts, out, num_points);
     }
 
+    const auto unaligned_points =
+        ((alignment - pts_alignment) & (alignment - 1)) >> detail::countr_zero(sizeof(InputType));
+    ASSUME(unaligned_points < alignment); // tells the compiler that this loop is at most alignment
     // process scalar until we reach the first aligned point
-    std::size_t i;
-    for (i = 0; i < num_points % alignment; ++i) {
+    for (auto i = 0u; i < unaligned_points; ++i) [[likely]] {
       out[i] = operator()(pts[i]);
     }
-    return horner_polyeval<unroll_factor, true, true>(pts + i, out + i, num_points - i);
+    return horner_polyeval<unroll_factor, true, true>(pts + unaligned_points, out + unaligned_points,
+                                                      num_points - unaligned_points);
   }
 }
 
@@ -499,8 +502,7 @@ NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::
 }
 #endif
 
-template <typename... EvalTypes>
-C20CONSTEXPR FuncEvalMany<EvalTypes...>  make_func_eval(EvalTypes... evals) noexcept {
+template <typename... EvalTypes> C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept {
   return FuncEvalMany<EvalTypes...>(std::move(evals)...);
 }
 

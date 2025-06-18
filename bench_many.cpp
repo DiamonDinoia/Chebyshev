@@ -20,7 +20,7 @@ int main() {
   constexpr bool run_constexpr_benchmarks = !run_non_constexpr_benchmarks;
 
   // Define the number of points to benchmark
-  constexpr size_t num_points = 1024;
+  constexpr size_t num_points = 20000;
 
   // Data structures for the chosen number of points
   alignas(64) std::array<double, num_points> random_points{};
