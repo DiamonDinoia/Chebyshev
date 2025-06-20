@@ -31,7 +31,7 @@ int main() {
   std::vector<double, xsimd::aligned_allocator<double, 64>> aligned_output(num_points);
 
   // Essential constexpr declarations (placed just before their dependent uses)
-  constexpr auto f = [](double x) { return std::cos(x); };
+  constexpr auto f = [](const double x) { return std::cos(x); };
   constexpr double a = -.1;
   constexpr double b = .1;
   constexpr auto degree = 16;
@@ -45,7 +45,7 @@ int main() {
   bench.title("Monomial Vectorization Benchmark")
       .unit("eval")
       .warmup(1'000)
-      .relative(false)
+      .relative(true)
       .minEpochIterations(10'000)
       .batch(num_points); // Set batch size based on num_points
 

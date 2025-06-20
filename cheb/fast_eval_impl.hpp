@@ -206,7 +206,7 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType *
     }
 
     const auto unaligned_points =
-        ((alignment - pts_alignment) & (alignment - 1)) >> detail::countr_zero(sizeof(InputType));
+        std::min(((alignment - pts_alignment) & (alignment - 1)) >> detail::countr_zero(sizeof(InputType)), num_points);
     ASSUME(unaligned_points < alignment); // tells the compiler that this loop is at most alignment
     // process scalar until we reach the first aligned point
     for (auto i = 0u; i < unaligned_points; ++i) [[likely]] {
