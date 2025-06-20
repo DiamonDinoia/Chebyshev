@@ -227,7 +227,7 @@ constexpr auto make_func_eval(Func F, typename function_traits<Func>::arg0_type 
 #endif
 
 template <typename... EvalTypes>
-C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval_many(EvalTypes... evals) noexcept;
+C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept;
 
 } // namespace poly_eval
 
