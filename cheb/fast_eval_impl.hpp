@@ -507,7 +507,7 @@ NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::
 
 template <typename... EvalTypes> C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept {
   return FuncEvalMany<std::decay_t<EvalTypes>...>(
-        std::forward<EvalTypes>(evals)...);
+      std::forward<EvalTypes>(evals)...);
 }
 
 } // namespace poly_eval

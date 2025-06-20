@@ -37,6 +37,23 @@ template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(
 
 template <typename T> struct function_traits : function_traits<decltype(&T::operator())> {};
 
+template <typename T, typename = void> struct is_tuple_like : std::false_type {};
+
+template <typename T>
+struct is_tuple_like<T, std::void_t<decltype(std::tuple_size<std::remove_cvref_t<T>>::value)>> : std::true_type {};
+
+#if __cpp_concepts >= 201907L
+template <typename T>
+concept tuple_like = is_tuple_like<T>::value;
+#endif
+
+// Convenience: size-or-zero that never hard-errors
+template <typename T, typename = void> struct tuple_size_or_zero : std::integral_constant<std::size_t, 0> {};
+
+template <typename T>
+struct tuple_size_or_zero<T, std::void_t<decltype(std::tuple_size<std::remove_cvref_t<T>>::value)>>
+    : std::integral_constant<std::size_t, std::tuple_size<std::remove_cvref_t<T>>::value> {};
+
 // -----------------------------------------------------------------------------
 // Buffer: Conditional type alias for std::vector or std::array
 // -----------------------------------------------------------------------------
@@ -98,24 +115,20 @@ private:
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
   void no_inline_horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
-  C20CONSTEXPR static Buffer<OutputType, N_compile_time>
-  bjorck_pereyra(const Buffer<InputType, N_compile_time>& x,
-                 const Buffer<OutputType, N_compile_time>& y);
+  C20CONSTEXPR static Buffer<OutputType, N_compile_time> bjorck_pereyra(const Buffer<InputType, N_compile_time> &x,
+                                                                        const Buffer<OutputType, N_compile_time> &y);
 
   C20CONSTEXPR static Buffer<OutputType, N_compile_time>
-  newton_to_monomial(const Buffer<OutputType, N_compile_time>& alpha,
-                     const Buffer<InputType, N_compile_time>& nodes);
+  newton_to_monomial(const Buffer<OutputType, N_compile_time> &alpha, const Buffer<InputType, N_compile_time> &nodes);
 
-  C20CONSTEXPR void
-  refine(const Buffer<InputType, N_compile_time>& x_cheb_,
-         const Buffer<OutputType, N_compile_time>& y_cheb_);
+  C20CONSTEXPR void refine(const Buffer<InputType, N_compile_time> &x_cheb_,
+                           const Buffer<OutputType, N_compile_time> &y_cheb_);
 
   // Friend declaration for FuncEvalMany to access private members
   template <typename... EvalTypes> friend class FuncEvalMany;
 };
 
-template <typename... EvalTypes>
-class FuncEvalMany {
+template <typename... EvalTypes> class FuncEvalMany {
   static_assert(sizeof...(EvalTypes) > 0, "At least one FuncEval is required");
   using FirstEval = std::tuple_element_t<0, std::tuple<EvalTypes...>>;
 
@@ -128,8 +141,7 @@ public:
                 "All FuncEval types must have the same OutputType");
 
   /// Construct from pre-built FuncEval objects
-  C20CONSTEXPR explicit FuncEvalMany(EvalTypes... evals)
-      : evals_{std::move(evals)...} {}
+  C20CONSTEXPR explicit FuncEvalMany(EvalTypes... evals) : evals_{std::move(evals)...} {}
 
   /// Number of functions in the group
   [[nodiscard]] constexpr std::size_t size() const noexcept { return sizeof...(EvalTypes); }
@@ -148,25 +160,36 @@ public:
 
   /// Evaluate with one argument per function (variadic), returning tuple
   template <typename... Args,
-            std::enable_if_t<sizeof...(Args) == sizeof...(EvalTypes) &&
-                             (std::is_convertible_v<Args, InputType> && ...), int> = 0>
-  [[nodiscard]] constexpr auto operator()(Args&&... args) const noexcept {
+            std::enable_if_t<sizeof...(Args) == sizeof...(EvalTypes) && (std::is_convertible_v<Args, InputType> && ...),
+                             int> = 0>
+  [[nodiscard]] constexpr auto operator()(Args &&...args) const noexcept {
     return eval_args_impl(std::make_index_sequence<sizeof...(EvalTypes)>{}, std::forward<Args>(args)...);
   }
 
   /// Evaluate with tuple of inputs (size N), returning tuple
-  template <typename Tuple,
-            std::enable_if_t<std::tuple_size_v<std::remove_reference_t<Tuple>> == sizeof...(EvalTypes), int> = 0>
-  [[nodiscard]] constexpr auto operator()(Tuple&& tup) const noexcept {
-    return std::apply([this](auto&&... elems) {
-                        return (*this)(std::forward<decltype(elems)>(elems)...);
-                      },
+#if __cpp_concepts >= 201907L
+  // ---------------- C++20 version ----------------
+  template <tuple_like Tuple>
+    requires(std::tuple_size_v<std::remove_cvref_t<Tuple>> == sizeof...(EvalTypes))
+  [[nodiscard]] constexpr auto operator()(Tuple &&tup) const noexcept {
+    return std::apply([this](auto &&...elems) { return (*this)(std::forward<decltype(elems)>(elems)...); },
                       std::forward<Tuple>(tup));
   }
 
+#else
+  // ---------------- C++17/18 fallback ----------------
+  template <typename Tuple,
+            std::enable_if_t<(tuple_size_or_zero<std::remove_reference_t<Tuple>>::value != 0) &&
+                                 (tuple_size_or_zero<std::remove_reference_t<Tuple>>::value == sizeof...(EvalTypes)),
+                             int> = 0>
+  [[nodiscard]] constexpr auto operator()(Tuple &&tup) const noexcept {
+    return std::apply([this](auto &&...elems) { return (*this)(std::forward<decltype(elems)>(elems)...); },
+                      std::forward<Tuple>(tup));
+  }
+#endif
   /// Evaluate with array of inputs (size N), returning std::array
-  [[nodiscard]] constexpr std::array<OutputType, sizeof...(EvalTypes)> operator()
-      (const std::array<InputType, sizeof...(EvalTypes)>& inputs) const noexcept {
+  [[nodiscard]] constexpr std::array<OutputType, sizeof...(EvalTypes)>
+  operator()(const std::array<InputType, sizeof...(EvalTypes)> &inputs) const noexcept {
     return eval_array_impl(inputs, std::make_index_sequence<sizeof...(EvalTypes)>{});
   }
 
@@ -174,29 +197,26 @@ private:
   std::tuple<EvalTypes...> evals_;
 
   // Helper: evaluate all at same arg into tuple
-  template <std::size_t... I>
-  constexpr auto eval_impl(InputType arg, std::index_sequence<I...>) const noexcept {
+  template <std::size_t... I> constexpr auto eval_impl(InputType arg, std::index_sequence<I...>) const noexcept {
     return std::make_tuple(std::get<I>(evals_)(arg)...);
   }
 
   // Helper: evaluate each with its own arg into tuple
   template <std::size_t... I, typename... Args>
-  constexpr auto eval_args_impl(std::index_sequence<I...>, Args&&... args) const noexcept {
+  constexpr auto eval_args_impl(std::index_sequence<I...>, Args &&...args) const noexcept {
     auto packed = std::forward_as_tuple(std::forward<Args>(args)...);
     return std::make_tuple(std::get<I>(evals_)(std::get<I>(packed))...);
   }
 
   // Helper: evaluate array-input into std::array
   template <std::size_t... I>
-  constexpr std::array<OutputType, sizeof...(EvalTypes)> eval_array_impl(
-      const std::array<InputType, sizeof...(EvalTypes)>& inputs,
-      std::index_sequence<I...>) const noexcept {
-    return {{ std::get<I>(evals_)(inputs[I])... }};
+  constexpr std::array<OutputType, sizeof...(EvalTypes)>
+  eval_array_impl(const std::array<InputType, sizeof...(EvalTypes)> &inputs, std::index_sequence<I...>) const noexcept {
+    return {{std::get<I>(evals_)(inputs[I])...}};
   }
 
   // Helper: gather coeffs into tuple
-  template <std::size_t... I>
-  constexpr auto coeffs_impl(std::index_sequence<I...>) const {
+  template <std::size_t... I> constexpr auto coeffs_impl(std::index_sequence<I...>) const {
     return std::make_tuple(std::get<I>(evals_).coeffs()...);
   }
 };
@@ -226,8 +246,7 @@ constexpr auto make_func_eval(Func F, typename function_traits<Func>::arg0_type 
                               typename function_traits<Func>::arg0_type b);
 #endif
 
-template <typename... EvalTypes>
-C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept;
+template <typename... EvalTypes> C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept;
 
 } // namespace poly_eval
 

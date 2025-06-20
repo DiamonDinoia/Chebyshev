@@ -1,64 +1,64 @@
-// bench_poly_eval.cppIs
-//
-// Benchmark poly_eval::make_func_eval groups with ankerl::nanobench
-//
-// g++ -std=c++20 -O3 -march=native -I/path/to/nanobench -I/path/to/poly_eval \
-//     bench_poly_eval.cpp -o bench_poly_eval
-//
-// Run: ./bench_poly_eval --json benchmark.json   (optional nanobench CLI flags)
+#include "fast_eval.hpp"
+#include <cmath>
+#include <iostream>
+#include <nanobench.h>
+#include <random>
+#include <vector>
 
-#include <nanobench.h>          // ankerl::nanobench
-#include "fast_eval.hpp"        // your poly_eval utilities
-#include <cmath>                // std::sin / std::cos
-#include <array>
-#include <tuple>
-#include <string_view>
-
-// -----------------------------------------------------------------------------
-// 1.  Helper that makes N identical sin-evaluators and groups them.
-//     The pack-expansion trick avoids writing N by hand.
-// -----------------------------------------------------------------------------
-template <std::size_t N, std::size_t... Is>
-static auto make_group_impl(std::index_sequence<Is...>) {
-    // Create one evaluator inside the expansion — each copy is independent.
-    auto make_one = [] {
-        return poly_eval::make_func_eval(
-            [](double x) { return std::sin(x); }, 16 /*deg*/, -1.0, 1.0);
-    };
-    return poly_eval::make_func_eval( (static_cast<void>(Is), make_one())... );
+// Helper to build a FuncEvalMany with N identical sin evaluators
+template <std::size_t N, std::size_t... Is> static auto make_group_impl(std::index_sequence<Is...>) {
+  auto make_one = [] { return poly_eval::make_func_eval([](double x) { return std::sin(x); }, 16, -1.0, 1.0); };
+  return poly_eval::make_func_eval((static_cast<void>(Is), make_one())...);
 }
 
-template <std::size_t N>
-static auto make_group() {
-    return make_group_impl<N>(std::make_index_sequence<N>{});
+template <std::size_t N> static auto make_group() { return make_group_impl<N>(std::make_index_sequence<N>{}); }
+
+// Benchmark a group with N functions over the given input points
+template <std::size_t N> static void bench_group(const std::vector<double> &pts, ankerl::nanobench::Bench &bench) {
+  auto group = make_group<N>();
+  double total = 0.0;
+  bench.run(std::to_string(N) + " funcs", [&] {
+    for (double x : pts) {
+      auto tup = group(x);
+      total += std::apply([](auto... vals) { return (vals + ...); }, tup);
+    }
+  });
+  // std::cout << "Checksum (" << N << ") = " << total << "\n";
 }
 
-// -----------------------------------------------------------------------------
-// 2.  Single-benchmark helper
-// -----------------------------------------------------------------------------
-template <std::size_t N>
-static void bench_group(ankerl::nanobench::Bench& bench) {
-    auto group = make_group<N>();
-    double x = 0.42;
-    bench.run(std::to_string(N) + " funcs", [&] {
-        // Evaluate all N funcs on the *same* x; change if you need different x.
-      group(x);
-    });
+// Compile-time dispatcher up to MaxN
+template <std::size_t MaxN>
+static bool dispatch(std::size_t n, const std::vector<double> &pts, ankerl::nanobench::Bench &bench) {
+  if constexpr (MaxN == 0) {
+    return false;
+  } else {
+    if (n == MaxN) {
+      bench_group<MaxN>(pts, bench);
+      return true;
+    }
+    return dispatch<MaxN - 1>(n, pts, bench);
+  }
 }
 
-// -----------------------------------------------------------------------------
-// 3.  Drive benchmarks for any constexpr list of sizes
-// -----------------------------------------------------------------------------
-int main() {
-    ankerl::nanobench::Bench bench;
-    bench.title("poly_eval grouped-function throughput");
-    bench.unit("eval");          // each run counts 1 group evaluation
-    bench.warmup(100);
-    bench.minEpochIterations(10'000);
+int main(int argc, char **argv) {
+  /* ---------- 1. generate the inputs once -------------------------------- */
+  constexpr std::size_t num_points = 1024;
+  std::mt19937 rng{42};
+  std::uniform_real_distribution<double> dist(-1.0, 1.0);
 
-    // <<< Edit this list or turn it into a constexpr array to sweep sizes >>>
-    bench_group<2>(bench);
-    bench_group<4>(bench);
-    bench_group<8>(bench);
-    bench_group<16>(bench);
+  std::vector<double> pts(num_points);
+  for (auto &p : pts)
+    p = dist(rng);
+
+  /* ---------- 2. configure the benchmark object once --------------------- */
+  ankerl::nanobench::Bench bench;
+  bench.title("poly_eval grouped-function throughput")
+      .unit("eval")
+      .warmup(100)
+      .minEpochIterations(10'000)
+      .batch(num_points);
+
+  /* ---------- 3. run N = 1 .. 16 ----------------------------------------- */
+  for (std::size_t n = 1; n <= 16; ++n)
+    dispatch<16>(n, pts, bench); // always succeeds for 1‒16
 }
