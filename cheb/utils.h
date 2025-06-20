@@ -15,7 +15,7 @@ namespace poly_eval::detail {
 // If an address is N-byte aligned, its N lowest bits must be zero.
 // So, if an address is 8-byte aligned (e.g., 0x...1000), it has 3 trailing zeros.
 // 2^3 = 8.
-template <typename T> ALWAYS_INLINE constexpr auto countr_zero(const T x) noexcept {
+template <typename T> constexpr auto countr_zero(const T x) noexcept {
   static_assert(std::is_unsigned_v<T>, "cntz requires an unsigned integral type");
   static_assert(std::is_unsigned<T>::value, "countr_zero_impl requires an unsigned type");
 #if defined(__cpp_lib_bitops) && (__cpp_lib_bitops >= 201907L)
@@ -35,16 +35,13 @@ template <typename T> ALWAYS_INLINE constexpr auto countr_zero(const T x) noexce
 #endif
 }
 
-template <typename T> ALWAYS_INLINE constexpr size_t get_alignment(const T *ptr) noexcept {
+template <typename T> constexpr size_t get_alignment(const T *ptr) noexcept {
   const auto address = reinterpret_cast<uintptr_t>(ptr);
-
   if (address == 0) {
     // A null pointer (or an address of 0) doesn't have a meaningful alignment
-    // in the context of data access. You could return 0 or 1 depending on
-    // your specific interpretation, but 0 makes sense here.
+    // in the context of data access.
     return 0;
   }
-  // Modern C++ (C++20 and later) has built-in functions for this
   return static_cast<size_t>(1) << detail::countr_zero(address);
 }
 

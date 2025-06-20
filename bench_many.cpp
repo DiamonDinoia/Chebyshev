@@ -16,11 +16,11 @@ int main() {
   std::mt19937 rng{seed};
 
   // Control flags for benchmark execution
-  constexpr bool run_non_constexpr_benchmarks = false;
+  constexpr bool run_non_constexpr_benchmarks = true;
   constexpr bool run_constexpr_benchmarks = !run_non_constexpr_benchmarks;
 
   // Define the number of points to benchmark
-  constexpr size_t num_points = 20000;
+  constexpr size_t num_points = 1024;
 
   // Data structures for the chosen number of points
   alignas(64) std::array<double, num_points> random_points{};
@@ -37,7 +37,7 @@ int main() {
   constexpr auto degree = 16;
   // Now, declare objects that depend on the above constexprs
   const auto evaluator = poly_eval::make_func_eval(f, degree, a, b);
-  const auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
+  constexpr auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
 
   // Other non-constexpr declarations that depend on previously defined constexprs
   std::uniform_real_distribution<double> dist{a, b}; // Depends on 'a' and 'b'
@@ -46,7 +46,7 @@ int main() {
       .unit("eval")
       .warmup(1'000)
       .relative(false)
-      .minEpochIterations(5'000)
+      .minEpochIterations(10'000)
       .batch(num_points); // Set batch size based on num_points
 
   // Populate all data sets

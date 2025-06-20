@@ -336,7 +336,7 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(const Buf
   // temporarily do pushes in a vector, then copy back
   int n = static_cast<int>(alpha.size());
   // Build coefficient buffer using Buffer instead of std::vector
-  Buffer<OutputType, N_compile_time> c{0}; // zero-initialized for static size
+  Buffer<OutputType, N_compile_time * 2> c{0}; // zero-initialized for static size
   if constexpr (N_compile_time == 0) {
     c.reserve(n);
     c.push_back(static_cast<OutputType>(0.0)); // start with constant term = 0
@@ -355,8 +355,11 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(const Buf
   if constexpr (N_compile_time == 0) {
     if (static_cast<int>(c.size()) > n)
       c.resize(n);
+    return c;
   }
-  return c;
+  Buffer<OutputType, N_compile_time> result{}; // zero-initialized for static size
+  std::copy(c.begin(), c.begin() + N_compile_time, result.begin());
+  return result;
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
