@@ -10,30 +10,7 @@
 
 namespace poly_eval {
 
-// -----------------------------------------------------------------------------
-// function_traits: Helper to deduce input and output types from a callable
-// -----------------------------------------------------------------------------
-template <typename T> struct function_traits;
 
-template <typename R, typename Arg> struct function_traits<R (*)(Arg)> {
-  using result_type = R;
-  using arg0_type = Arg;
-};
-
-template <typename R, typename Arg> struct function_traits<std::function<R(Arg)>> {
-  using result_type = R;
-  using arg0_type = Arg;
-};
-
-template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(Arg) const> {
-  using result_type = R;
-  using arg0_type = Arg;
-};
-
-template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(Arg)> {
-  using result_type = R;
-  using arg0_type = Arg;
-};
 
 template <typename T> struct function_traits : function_traits<decltype(&T::operator())> {};
 
@@ -177,7 +154,7 @@ public:
   }
 
 #else
-  // ---------------- C++17/18 fallback ----------------
+  // ---------------- C++17 fallback ----------------
   template <typename Tuple,
             std::enable_if_t<(tuple_size_or_zero<std::remove_reference_t<Tuple>>::value != 0) &&
                                  (tuple_size_or_zero<std::remove_reference_t<Tuple>>::value == sizeof...(EvalTypes)),

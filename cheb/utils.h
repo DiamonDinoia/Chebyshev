@@ -9,6 +9,34 @@
 
 #include "macros.h"
 
+
+namespace poly_eval {
+// -----------------------------------------------------------------------------
+// function_traits: Helper to deduce input and output types from a callable
+// -----------------------------------------------------------------------------
+template <typename T> struct function_traits;
+
+template <typename R, typename Arg> struct function_traits<R (*)(Arg)> {
+  using result_type = R;
+  using arg0_type = Arg;
+};
+
+template <typename R, typename Arg> struct function_traits<std::function<R(Arg)>> {
+  using result_type = R;
+  using arg0_type = Arg;
+};
+
+template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(Arg) const> {
+  using result_type = R;
+  using arg0_type = Arg;
+};
+
+template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(Arg)> {
+  using result_type = R;
+  using arg0_type = Arg;
+};
+}
+
 namespace poly_eval::detail {
 
 // std::countr_zero returns the number of trailing zero bits.

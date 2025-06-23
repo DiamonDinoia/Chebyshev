@@ -16,14 +16,12 @@ template <std::size_t N> static auto make_group() { return make_group_impl<N>(st
 // Benchmark a group with N functions over the given input points
 template <std::size_t N> static void bench_group(const std::vector<double> &pts, ankerl::nanobench::Bench &bench) {
   auto group = make_group<N>();
-  double total = 0.0;
   bench.run(std::to_string(N) + " funcs", [&] {
     for (double x : pts) {
       auto tup = group(x);
-      total += std::apply([](auto... vals) { return (vals + ...); }, tup);
+      ankerl::nanobench::doNotOptimizeAway(tup); // Prevent optimization of the result
     }
   });
-  // std::cout << "Checksum (" << N << ") = " << total << "\n";
 }
 
 // Compile-time dispatcher up to MaxN

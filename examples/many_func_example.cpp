@@ -24,5 +24,8 @@ int main() {
   // Array call
   auto aresults = group(array_args);
   std::cout << "(array) sin = " << std::get<0>(aresults) << ", cos = " << std::get<1>(aresults) << '\n';
-  return 0;
+
+  // Variadic arguments call
+  auto varesults = group(x, y);
+  std::cout << "varesults sin = " << std::get<0>(varesults) << ", cos = " << std::get<1>(varesults) << '\n';
 }
