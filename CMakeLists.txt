@@ -76,7 +76,7 @@ target_compile_options(bench1d_1d PRIVATE -march=native)
 
 
 add_executable(bench_many bench_many.cpp)
-target_compile_features(bench_many PRIVATE cxx_std_20)
+target_compile_features(bench_many PRIVATE cxx_std_17)
 target_include_directories(bench_many PRIVATE cheb)
 target_link_libraries(bench_many PRIVATE nanobench::nanobench xsimd std::mdspan)
 target_compile_options(bench_many PRIVATE -march=native)

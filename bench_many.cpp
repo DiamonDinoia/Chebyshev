@@ -37,7 +37,7 @@ int main() {
   constexpr auto degree = 16;
   // Now, declare objects that depend on the above constexprs
   const auto evaluator = poly_eval::make_func_eval(f, degree, a, b);
-  constexpr auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
+  C20CONSTEXPR auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
 
   // Other non-constexpr declarations that depend on previously defined constexprs
   std::uniform_real_distribution<double> dist{a, b}; // Depends on 'a' and 'b'
@@ -53,8 +53,9 @@ int main() {
   for (auto &pt : random_points) {
     pt = dist(rng);
   }
-  std::ranges::copy(random_points, unaligned_random_points.begin());
-  std::ranges::copy(random_points, aligned_random_points.begin());
+
+  std::copy(random_points.begin(), random_points.end(), unaligned_random_points.begin());
+  std::copy(random_points.begin(), random_points.end(), aligned_random_points.begin());
 
   // --- NON-CONSTEXPR Benchmarks ---
   if (run_non_constexpr_benchmarks) {
@@ -67,12 +68,12 @@ int main() {
       }
     });
     const auto sum_auto = std::accumulate(output.begin(), output.end(), 0.0);
-    std::ranges::fill(output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     bench.run("manual vectorization (std::array)",
               [&] { evaluator.operator()<true, true>(random_points.data(), output.data(), random_points.size()); });
     const auto sum_manual = std::accumulate(output.begin(), output.end(), 0.0);
-    std::ranges::fill(output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     // Benchmarks with Unaligned std::vector
     bench.run("auto vectorization (unaligned)", [&] {
@@ -81,13 +82,13 @@ int main() {
       }
     });
     const auto sum_unaligned_auto = std::accumulate(unaligned_output.begin(), unaligned_output.end(), 0.0);
-    std::ranges::fill(unaligned_output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     bench.run("manual vectorization (unaligned)", [&] {
       evaluator(unaligned_random_points.data(), unaligned_output.data(), unaligned_random_points.size());
     });
     const auto sum_unaligned_manual = std::accumulate(unaligned_output.begin(), unaligned_output.end(), 0.0);
-    std::ranges::fill(unaligned_output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     // Benchmarks with Aligned xsimd::aligned_allocator
     bench.run("auto vectorization (aligned)", [&] {
@@ -96,12 +97,12 @@ int main() {
       }
     });
     const auto sum_aligned_auto = std::accumulate(aligned_output.begin(), aligned_output.end(), 0.0);
-    std::ranges::fill(aligned_output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     bench.run("manual vectorization (aligned)",
               [&] { evaluator(aligned_random_points.data(), aligned_output.data(), aligned_random_points.size()); });
     const auto sum_aligned_manual = std::accumulate(aligned_output.begin(), aligned_output.end(), 0.0);
-    std::ranges::fill(aligned_output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     std::cout << std::scientific << std::setprecision(16);
     std::cout << "\n--- Sums from NON-CONSTEXPR benchmarks (" << num_points << " points) ---\n";
@@ -124,12 +125,12 @@ int main() {
       }
     });
     const auto sum_auto_const = std::accumulate(output.begin(), output.end(), 0.0);
-    std::ranges::fill(output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     bench.run("constexpr manual vectorization (std::array)",
               [&] { fixed_evaluator(random_points.data(), output.data(), random_points.size()); });
     const auto sum_manual_const = std::accumulate(output.begin(), output.end(), 0.0);
-    std::ranges::fill(output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     // Benchmarks with Unaligned std::vector
     bench.run("constexpr auto vectorization (unaligned)", [&] {
@@ -138,13 +139,13 @@ int main() {
       }
     });
     const auto sum_unaligned_auto_const = std::accumulate(unaligned_output.begin(), unaligned_output.end(), 0.0);
-    std::ranges::fill(unaligned_output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     bench.run("constexpr manual vectorization (unaligned)", [&] {
       fixed_evaluator(unaligned_random_points.data(), unaligned_output.data(), unaligned_random_points.size());
     });
     const auto sum_unaligned_manual_const = std::accumulate(unaligned_output.begin(), unaligned_output.end(), 0.0);
-    std::ranges::fill(unaligned_output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     // Benchmarks with Aligned xsimd::aligned_allocator
     bench.run("constexpr auto vectorization (aligned)", [&] {
@@ -153,13 +154,13 @@ int main() {
       }
     });
     const auto sum_aligned_auto_const = std::accumulate(aligned_output.begin(), aligned_output.end(), 0.0);
-    std::ranges::fill(aligned_output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     bench.run("constexpr manual vectorization (aligned)", [&] {
       fixed_evaluator(aligned_random_points.data(), aligned_output.data(), aligned_random_points.size());
     });
     const auto sum_aligned_manual_const = std::accumulate(aligned_output.begin(), aligned_output.end(), 0.0);
-    std::ranges::fill(aligned_output, 0.0);
+    std::fill(output.begin(), output.end(), 0.0);
 
     std::cout << std::scientific << std::setprecision(16);
     std::cout << "\n--- Sums from CONSTEXPR benchmarks (" << num_points << " points) ---\n";

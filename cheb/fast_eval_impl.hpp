@@ -52,8 +52,8 @@ C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType C20CONSTEXPR ALWAYS_INLINE
-FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType pt) const noexcept {
+typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr ALWAYS_INLINE FuncEval<
+    Func, N_compile_time, Iters_compile_time>::operator()(const InputType pt) const noexcept {
   const auto xi = map_from_domain(pt);
   return horner<N_compile_time>(xi, monomials.data(), monomials.size()); // Pass data pointer and size
 }
@@ -61,9 +61,9 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType p
 // Batch evaluation implementation using SIMD and unrolling
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_polyeval(
+ALWAYS_INLINE constexpr void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_polyeval(
     const InputType *RESTRICT pts, OutputType *RESTRICT out, std::size_t num_points) const noexcept {
-  static_assert(OuterUnrollFactor >=0 && (OuterUnrollFactor & (OuterUnrollFactor - 1)) == 0,
+  static_assert(OuterUnrollFactor >= 0 && (OuterUnrollFactor & (OuterUnrollFactor - 1)) == 0,
                 "OuterUnrollFactor must be a power of two greater than zero.");
   return horner<N_compile_time, pts_aligned, out_aligned, OuterUnrollFactor>(
       pts, out, num_points, monomials.data(), monomials.size(), [this](const auto v) { return map_from_domain(v); });
@@ -72,7 +72,7 @@ ALWAYS_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::horner_po
 // Batch evaluation implementation using SIMD and unrolling
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-NO_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::no_inline_horner_polyeval(
+NO_INLINE constexpr void FuncEval<Func, N_compile_time, Iters_compile_time>::no_inline_horner_polyeval(
     const InputType *RESTRICT pts, OutputType *RESTRICT out, std::size_t num_points) const noexcept {
   return horner<N_compile_time, pts_aligned, out_aligned, OuterUnrollFactor>(
       pts, out, num_points, monomials.data(), monomials.size(), [this](const auto v) { return map_from_domain(v); });
@@ -80,9 +80,8 @@ NO_INLINE void FuncEval<Func, N_compile_time, Iters_compile_time>::no_inline_hor
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
 template <bool pts_aligned, bool out_aligned>
-ALWAYS_INLINE void
-FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType *RESTRICT pts, OutputType *RESTRICT out,
-                                                               std::size_t num_points) const noexcept {
+ALWAYS_INLINE void constexpr FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(
+    const InputType * RESTRICT pts, OutputType * RESTRICT out, std::size_t num_points) const noexcept {
   // find out the alignment of pts and out
   constexpr auto simd_size = xsimd::batch<InputType>::size;
   constexpr auto alignment = xsimd::best_arch::alignment();
@@ -239,21 +238,23 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::refine(const Buffer<InputTyp
     if constexpr (N_compile_time == 0) {
       r_cheb.resize(n_terms);
     }
-
+    std::reverse(monomials.begin(), monomials.end());
     for (std::size_t i = 0; i < n_terms; ++i) {
       auto xi = x_cheb_[i];
       auto p_val = poly_eval::horner<N_compile_time>(xi, monomials.data(), monomials.size());
       r_cheb[i] = y_cheb_[i] - p_val;
     }
-
+    std::reverse(monomials.begin(), monomials.end());
     // correction
     auto newton_r = bjorck_pereyra(x_cheb_, r_cheb);
     auto mono_r = newton_to_monomial(newton_r, x_cheb_);
     assert(mono_r.size() == monomials.size());
+
     for (std::size_t j = 0; j < monomials.size(); ++j) {
       monomials[j] += mono_r[j];
     }
   }
+  std::reverse(monomials.begin(), monomials.end());
 }
 
 // -----------------------------------------------------------------------------

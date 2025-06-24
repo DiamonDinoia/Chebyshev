@@ -53,7 +53,7 @@ template <typename T> constexpr ALWAYS_INLINE T fma(const T& a, const T& b, cons
 // If an address is N-byte aligned, its N lowest bits must be zero.
 // So, if an address is 8-byte aligned (e.g., 0x...1000), it has 3 trailing zeros.
 // 2^3 = 8.
-template <typename T> constexpr auto countr_zero(const T x) noexcept {
+template <typename T> constexpr auto countr_zero(T x) noexcept {
   static_assert(std::is_unsigned_v<T>, "cntz requires an unsigned integral type");
   static_assert(std::is_unsigned<T>::value, "countr_zero_impl requires an unsigned type");
 #if defined(__cpp_lib_bitops) && (__cpp_lib_bitops >= 201907L)
@@ -61,11 +61,11 @@ template <typename T> constexpr auto countr_zero(const T x) noexcept {
   return std::countr_zero(x);
 #else
   // constexpr portable fallback
-  constexpr int w = std::numeric_limits<UInt>::digits;
+  constexpr int w = std::numeric_limits<T>::digits;
   if (x == 0)
     return w;
   int n = 0;
-  while ((x & UInt{1}) == UInt{0}) {
+  while ((x & T{1}) == T{0}) {
     x >>= 1;
     ++n;
   }

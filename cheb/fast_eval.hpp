@@ -10,6 +10,16 @@
 
 #include "macros.h"
 
+#if __cplusplus < 202002L
+namespace std {
+template <typename T> using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
+constexpr bool is_constant_evaluated() noexcept {
+  return false; // Always returns false in pre-C++20 code
+}
+} // namespace std
+#endif
+
 namespace poly_eval {
 
 template <typename T> struct function_traits : function_traits<decltype(&T::operator())> {};
@@ -17,7 +27,7 @@ template <typename T> struct function_traits : function_traits<decltype(&T::oper
 template <typename T, typename = void> struct is_tuple_like : std::false_type {};
 
 template <typename T>
-struct is_tuple_like<T, std::void_t<decltype(std::tuple_size<std::remove_cvref_t<T>>::value)>> : std::true_type {};
+struct is_tuple_like<T, std::void_t<decltype(std::tuple_size_v<std::remove_cvref_t<T>>)>> : std::true_type {};
 
 #if __cpp_concepts >= 201907L
 template <typename T>
@@ -60,10 +70,10 @@ public:
   template <std::size_t CurrentN = N_compile_time, typename = std::enable_if_t<CurrentN == 0>>
   C20CONSTEXPR FuncEval(Func F, int n, InputType a, InputType b, const InputType *pts = nullptr);
 
-  C20CONSTEXPR OutputType operator()(InputType pt) const noexcept;
+  constexpr OutputType operator()(InputType pt) const noexcept;
 
   template <bool pts_aligned = false, bool out_aligned = false>
-  void operator()(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
+  constexpr void operator()(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
   C20CONSTEXPR const Buffer<OutputType, N_compile_time> &coeffs() const noexcept;
 
@@ -79,10 +89,11 @@ private:
 
   // Evaluate multiple points using SIMD with unrolling
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-  void horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
+  constexpr void horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-  void no_inline_horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
+  NO_INLINE constexpr void no_inline_horner_polyeval(const InputType *pts, OutputType *out,
+                                           std::size_t num_points) const noexcept;
 
   C20CONSTEXPR static Buffer<OutputType, N_compile_time> bjorck_pereyra(const Buffer<InputType, N_compile_time> &x,
                                                                         const Buffer<OutputType, N_compile_time> &y);
@@ -97,17 +108,15 @@ private:
   template <typename... EvalTypes> friend class FuncEvalMany;
 };
 
-
 // FuncEvalMany: evaluates multiple FuncEval instances
 // Supports both compile-time fixed degree and runtime degree
 // FuncEvalMany: evaluates multiple FuncEval instances without storing EvalTypes
-template <typename... EvalTypes>
-class FuncEvalMany {
+template <typename... EvalTypes> class FuncEvalMany {
   static_assert(sizeof...(EvalTypes) > 0, "At least one FuncEval is required");
 
-  using FirstEval   = std::tuple_element_t<0, std::tuple<EvalTypes...>>;
-  using InputType   = typename FirstEval::InputType;
-  using OutputType  = typename FirstEval::OutputType;
+  using FirstEval = std::tuple_element_t<0, std::tuple<EvalTypes...>>;
+  using InputType = typename FirstEval::InputType;
+  using OutputType = typename FirstEval::OutputType;
 
   static constexpr std::size_t kF = sizeof...(EvalTypes);
   static constexpr std::size_t deg_max_ctime_ = std::max({EvalTypes::kDegreeCompileTime...});
@@ -118,11 +127,7 @@ class FuncEvalMany {
   // Contiguous storage for coefficients
   Buffer<OutputType, kF * deg_max_ctime_> coeff_storage_;
   static constexpr std::size_t dyn_extent = std::experimental::dynamic_extent;
-  using Extents = std::experimental::extents<
-      std::size_t,
-      kF,
-      (deg_max_ctime_ != 0 ? deg_max_ctime_ : dyn_extent)
-  >;
+  using Extents = std::experimental::extents<std::size_t, kF, (deg_max_ctime_ != 0 ? deg_max_ctime_ : dyn_extent)>;
   std::experimental::mdspan<OutputType, Extents> coeffs_;
 
   // Contiguous mapping parameters
@@ -131,21 +136,14 @@ class FuncEvalMany {
 
 public:
   // Constructor: copies low/hi, determines runtime degree, allocates and copies coefficients
-  explicit FuncEvalMany(const EvalTypes&... evals)
-    : low_{evals.low...}
-    , hi_{evals.hi...}
-    , coeffs_{nullptr, kF, deg_max_ctime_}
-  {
+  explicit FuncEvalMany(const EvalTypes &...evals)
+      : low_{evals.low...}, hi_{evals.hi...}, coeffs_{nullptr, kF, deg_max_ctime_} {
     if constexpr (deg_max_ctime_ == 0) {
       deg_max_ = std::max({evals.n_terms...});
       coeff_storage_.assign(kF * deg_max_, OutputType{});
-      coeffs_ = std::experimental::mdspan<OutputType, Extents>(
-        coeff_storage_.data(), kF, deg_max_
-      );
+      coeffs_ = std::experimental::mdspan<OutputType, Extents>(coeff_storage_.data(), kF, deg_max_);
     } else {
-      coeffs_ = std::experimental::mdspan<OutputType, Extents>(
-        coeff_storage_.data(), kF, deg_max_ctime_
-      );
+      coeffs_ = std::experimental::mdspan<OutputType, Extents>(coeff_storage_.data(), kF, deg_max_ctime_);
     }
 
     copy_coeffs<0>(evals...);
@@ -182,17 +180,15 @@ public:
 
   // Evaluate with tuple of inputs: each element maps to corresponding polynomial
   template <typename... Ts>
-  [[nodiscard]] std::array<OutputType, kF> operator()(const std::tuple<Ts...>& inputs) const noexcept {
+  [[nodiscard]] std::array<OutputType, kF> operator()(const std::tuple<Ts...> &inputs) const noexcept {
     static_assert(sizeof...(Ts) == kF, "Tuple size must match number of functions");
     std::array<InputType, kF> arr{};
-    std::apply([&](auto&&... elems) {
-      arr = {static_cast<InputType>(elems)...};
-    }, inputs);
+    std::apply([&](auto &&...elems) { arr = {static_cast<InputType>(elems)...}; }, inputs);
     return operator()(arr);
   }
 
   // Evaluate with array of inputs
-  [[nodiscard]] std::array<OutputType, kF> operator()(const std::array<InputType, kF>& inputs) const noexcept {
+  [[nodiscard]] std::array<OutputType, kF> operator()(const std::array<InputType, kF> &inputs) const noexcept {
     std::array<OutputType, kF> results;
     for (std::size_t i = 0; i < kF; ++i) {
       InputType xu = (2 * inputs[i] - hi_[i]) * low_[i];
@@ -215,8 +211,7 @@ public:
 
 private:
   // Recursive helper: copy and pad coefficients for polynomial I
-  template <std::size_t I, typename FE, typename... Rest>
-  void copy_coeffs(const FE& fe, const Rest&... rest) {
+  template <std::size_t I, typename FE, typename... Rest> void copy_coeffs(const FE &fe, const Rest &...rest) {
     for (std::size_t k = 0; k < fe.n_terms; ++k) {
       coeffs_(I, k) = fe.monomials[k];
     }
