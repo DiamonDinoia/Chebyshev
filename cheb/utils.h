@@ -4,11 +4,10 @@
 #endif
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <utility>
+#include <xsimd/xsimd.hpp>
 
 #include "macros.h"
-
 
 namespace poly_eval {
 // -----------------------------------------------------------------------------
@@ -35,9 +34,20 @@ template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(
   using result_type = R;
   using arg0_type = Arg;
 };
-}
+} // namespace poly_eval
 
 namespace poly_eval::detail {
+
+template <typename T> constexpr ALWAYS_INLINE T fma(const T& a, const T& b, const T& c) noexcept {
+  // Fused multiply-add: a * b + c
+  if (std::is_constant_evaluated()) {
+    if constexpr (std::is_floating_point_v<T>) {
+      return std::fma(a, b, c);
+    }
+    return a * b + c;
+  }
+  return xsimd::fma(a, b, c);
+}
 
 // std::countr_zero returns the number of trailing zero bits.
 // If an address is N-byte aligned, its N lowest bits must be zero.
@@ -121,12 +131,12 @@ constexpr double cos(const double x) noexcept {
     constexpr double c5 = 2.08757232129817482790e-09;
     constexpr double c6 = -1.13596475577881948265e-11;
     const double z = yy * yy;
-    double r = std::fma(c6, z, c5);
-    r = std::fma(r, z, c4);
-    r = std::fma(r, z, c3);
-    r = std::fma(r, z, c2);
-    r = std::fma(r, z, c1);
-    return std::fma(z * z, r, 1.0 - 0.5 * z);
+    double r = fma(c6, z, c5);
+    r = fma(r, z, c4);
+    r = fma(r, z, c3);
+    r = fma(r, z, c2);
+    r = fma(r, z, c1);
+    return fma(z * z, r, 1.0 - 0.5 * z);
   };
 
   constexpr auto sin_poly = [](const double yy) constexpr {
@@ -137,12 +147,12 @@ constexpr double cos(const double x) noexcept {
     constexpr double s5 = -2.50507477628578072866e-08;
     constexpr double s6 = 1.58962301576546568060e-10;
     const double z = yy * yy;
-    double r = std::fma(s6, z, s5);
-    r = std::fma(r, z, s4);
-    r = std::fma(r, z, s3);
-    r = std::fma(r, z, s2);
-    r = std::fma(r, z, s1);
-    return std::fma(yy * z, r, yy);
+    double r = fma(s6, z, s5);
+    r = fma(r, z, s4);
+    r = fma(r, z, s3);
+    r = fma(r, z, s2);
+    r = fma(r, z, s1);
+    return fma(yy * z, r, yy);
   };
 
   /* quadrant dispatch—only compute what we need */

@@ -34,7 +34,7 @@ void check_errors(TFunc original_func, TPoly poly_evaluator,
     std::cout << std::setw(POINT_WIDTH) << std::left << "Random Point (x)";
     std::cout << std::setw(VALUE_WIDTH) << std::left << "Actual Value";
     std::cout << std::setw(VALUE_WIDTH) << std::left << "Poly Value";
-    std::cout << std::setw(ERROR_WIDTH) << std::left << "Relative Error (1-|P/A|)";
+    std::cout << std::setw(ERROR_WIDTH) << std::left << "Relative Error (|1-P/A|)";
     std::cout << "\n";
     // Print a separator line
     // Calculate total width of the separator based on column widths
@@ -53,7 +53,7 @@ void check_errors(TFunc original_func, TPoly poly_evaluator,
 
         // Calculate relative error using your specified formula: 1 - |P/A|
         // Note: This formula can yield negative results if |P/A| > 1.
-        double rel_err = 1.0 - std::abs(poly_val / actual_val);
+        double rel_err = std::abs(1.0 - poly_val / actual_val);
         // Print data row
         std::cout << std::setw(INDEX_WIDTH) << std::left << (i + 1);
         std::cout << std::setw(POINT_WIDTH) << std::left << random_point;

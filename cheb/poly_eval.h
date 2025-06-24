@@ -4,155 +4,132 @@
 #include "utils.h"
 
 #include <cassert>
-#include <xsimd/xsimd.hpp>
+#include <cmath>
 #include <cstddef>
-
+#include <xsimd/xsimd.hpp>
 
 namespace poly_eval {
-
-// -----------------------------------------------------------------------------
-// PolyEval: standalone Horner polynomial evaluator
-// -----------------------------------------------------------------------------
-
-template <typename T,
-          std::size_t N_compile_time = 0>
-class PolyEval {
-public:
-  // Runtime-sized constructor (only when N_compile_time == 0)
-  template <std::size_t N = N_compile_time,
-            typename = std::enable_if_t<N == 0>>
-  C20CONSTEXPR PolyEval(const T *coeffs, int n)
-    : _coeffs(coeffs), _n_terms(n) {
-    assert(_n_terms > 0 && "Polynomial degree must be positive");
-  }
-
-  // Compile-time-sized constructor (only when N_compile_time > 0)
-  template <std::size_t N = N_compile_time,
-            typename = std::enable_if_t<(N > 0)>>
-  C20CONSTEXPR PolyEval(const T *coeffs)
-    : _coeffs(coeffs), _n_terms(static_cast<int>(N_compile_time)) {
-    static_assert(N_compile_time > 0, "Need compile-time size > 0");
-  }
-
-  // Single-point Horner evaluation (expects x already in Chebyshev domain)
-  C20CONSTEXPR T eval(T x) const noexcept {
-    if constexpr (N_compile_time > 0) {
-      return horner<N_compile_time, 0>(_coeffs, x);
-    } else {
-      T acc = _coeffs[_n_terms - 1];
-      for (int k = _n_terms - 2; k >= 0; --k) {
-        acc = std::fma(x, acc, _coeffs[k]);
-      }
-      return acc;
-    }
-  }
-
-  // Scalar call operator delegates to eval
-  C20CONSTEXPR T operator()(T x) const noexcept { return eval(x); }
-
-  // Batch evaluation (SIMD + unrolling) - inputs must be pre-mapped
-  template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-  ALWAYS_INLINE
-  void eval_batch(const T * RESTRICT pts,
-                  T * RESTRICT out,
-                  std::size_t num_points) const noexcept {
-    static_assert(OuterUnrollFactor > 0 && (OuterUnrollFactor & (OuterUnrollFactor - 1)) == 0,
-                  "OuterUnrollFactor must be a power of two greater than zero.");
-
-    constexpr auto simd_size = xsimd::batch<T>::size;
-    const auto trunc_size = num_points & (-(int)(simd_size * OuterUnrollFactor));
-
-    // Determine aligned modes
-    static constexpr auto pts_mode = [] {
-      if constexpr (pts_aligned)
-        return xsimd::aligned_mode{};
-      else
-        return xsimd::unaligned_mode{};
-    }();
-    static constexpr auto out_mode = [] {
-      if constexpr (out_aligned)
-        return xsimd::aligned_mode{};
-      else
-        return xsimd::unaligned_mode{};
-    }();
-
-    // Process full SIMD+unroll blocks
-    for (std::size_t i = 0; i < trunc_size; i += simd_size * OuterUnrollFactor) {
-      xsimd::batch<T> pt_batches[OuterUnrollFactor];
-      xsimd::batch<T> acc_batches[OuterUnrollFactor];
-
-      // Load & initialize
-      detail::unroll_loop<OuterUnrollFactor>([&](auto j) {
-        pt_batches[j] = xsimd::load(pts + i + j * simd_size, pts_mode);
-        acc_batches[j] = xsimd::batch<T>(_coeffs[size() - 1]);
-      });
-
-      // Horner inner (compile-time or runtime)
-      if constexpr (N_compile_time > 0) {
-        horner<N_compile_time - 1, 0, OuterUnrollFactor>(pt_batches, acc_batches);
+template <std::size_t N_total = 0, typename OutputType, typename InputType>
+ALWAYS_INLINE constexpr OutputType horner(const InputType x, const OutputType *c_ptr, std::size_t c_size = 0) noexcept {
+  if constexpr (N_total != 0) {
+    // Compile-time unrolled Horner
+    // Start with highest-degree term
+    OutputType acc = c_ptr[N_total - 1];
+    // Unroll remaining N_total-1 steps
+    detail::unroll_loop<N_total - 1>([&](auto idx_c) {
+      const std::size_t i = idx_c; // value of the loop index
+      const std::size_t k = (N_total - 2) - i;
+      if constexpr (std::is_floating_point_v<OutputType>) {
+        acc = detail::fma(acc, x, c_ptr[k]);
       } else {
-        for (int k = _n_terms - 2; k >= 0; --k) {
-          detail::unroll_loop<OuterUnrollFactor>([&](auto j) {
-            acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<T>(_coeffs[k]));
-          });
-        }
+        using std::real;
+        using std::imag;
+        acc = OutputType{detail::fma(real(acc), x, real(c_ptr[k])), detail::fma(imag(acc), x, imag(c_ptr[k]))};
       }
-
-      // Store
-      detail::unroll_loop<OuterUnrollFactor>([&](auto j) {
-        xsimd::store(out + i + j * simd_size, acc_batches[j], out_mode);
-      });
+    });
+    return acc;
+  } else {
+    // Runtime iterative Horner
+    OutputType acc = c_ptr[c_size - 1];
+    for (std::size_t k = c_size - 1; k-- > 0;) {
+      if constexpr (std::is_floating_point_v<OutputType>) {
+        acc = detail::fma(acc, x, c_ptr[k]);
+      } else {
+        using std::imag;
+        using std::real;
+        acc = OutputType{detail::fma(real(acc), x, real(c_ptr[k])), detail::fma(imag(acc), x, imag(c_ptr[k]))};
+      }
     }
-
-    // Remainder
-    for (std::size_t i = trunc_size; i < num_points; ++i) {
-      out[i] = eval(pts[i]);
-    }
+    return acc;
   }
+}
 
-
-  // Default batch call operator (uses unaligned, factor=4)
-
-  void operator()(const T *in, T *out, std::size_t num_points) const noexcept {
-    eval_batch<4, false, false>(in, out, num_points);
-  }
-
-
-  // Total coefficient count
-  constexpr int size() const noexcept {
-    return N_compile_time > 0 ? static_cast<int>(N_compile_time) : _n_terms;
-  }
-
-private:
-  const T *_coeffs;
-  int _n_terms = N_compile_time;
-
-  // Recursive Horner for compile-time N
-  template <int K_Current, int K_Target, int OuterUnrollFactor>
-  ALWAYS_INLINE
-  void horner(xsimd::batch<T> * RESTRICT pt_batches,
-              xsimd::batch<T> * RESTRICT acc_batches) const noexcept {
-    if constexpr (K_Current >= K_Target) {
-      [&]<std::size_t... J>(std::integer_sequence<std::size_t, J...>) {
-        ((acc_batches[J] = xsimd::fma(
-              pt_batches[J], acc_batches[J],
-              xsimd::batch<T>(_coeffs[K_Current]))), ...);
-      }(std::make_integer_sequence<std::size_t, OuterUnrollFactor>{});
-      horner<K_Current - 1, K_Target, OuterUnrollFactor>(pt_batches, acc_batches);
-    }
-  }
-
-
-  // Compile-time scalar Horner
-  template <std::size_t N_total, std::size_t idx>
-  constexpr T horner(const T * RESTRICT c_ptr, T x) const noexcept {
-    if constexpr (idx == N_total - 1) {
-      return c_ptr[idx];
+//------------------------------------------------------------------------------
+// SIMD Horner with optional unroll of coefficients
+//------------------------------------------------------------------------------
+/// @tparam OuterUnrollFactor Number of SIMD batches per iteration
+/// @tparam pts_aligned       Are input points aligned
+/// @tparam out_aligned       Are outputs aligned
+/// @tparam N_monomials       Compile-time number of coefficients (0 = runtime)
+/// @tparam InputType         Scalar input type
+/// @tparam OutputType        Scalar output type
+/// @tparam MapFunc           Function to map each input before evaluation
+/// @param  pts               Input points array
+/// @param  out               Output values array
+/// @param  num_points        Number of points
+/// @param  monomials         Coefficients array
+/// @param  monomials_size    Number of coefficients (used if N_monomials==0)
+/// @param  map_func          Optional mapping function (default identity)
+template <std::size_t N_monomials = 0, bool pts_aligned = false, bool out_aligned = false, int UNROLL = 0,
+          typename InputType, typename OutputType, typename MapFunc = decltype([](auto v) { return v; })>
+ALWAYS_INLINE void horner(const InputType *pts, OutputType *out, std::size_t num_points, const OutputType *monomials,
+                          std::size_t monomials_size, const MapFunc map_func = {}) noexcept {
+  constexpr auto simd_size = xsimd::batch<InputType>::size;
+  constexpr auto OuterUnrollFactor = UNROLL > 0 ? UNROLL : 32 / sizeof(OutputType);
+  const std::size_t block = simd_size * OuterUnrollFactor;
+  const std::size_t trunc = num_points & (-block);
+  static constexpr auto pts_mode = [] {
+    if constexpr (pts_aligned) {
+      return xsimd::aligned_mode{};
     } else {
-      return std::fma(horner<N_total, idx + 1>(c_ptr, x), x, c_ptr[idx]);
+      return xsimd::unaligned_mode{};
     }
+  }();
+  static constexpr auto out_mode = [] {
+    if constexpr (out_aligned) {
+      return xsimd::aligned_mode{};
+    } else {
+      return xsimd::unaligned_mode{};
+    }
+  }();
+  for (std::size_t i = 0; i < trunc; i += block) {
+    xsimd::batch<InputType> pt_batches[OuterUnrollFactor];
+    xsimd::batch<OutputType> acc_batches[OuterUnrollFactor];
+    // Load and init
+    detail::unroll_loop<OuterUnrollFactor>([&](auto j) {
+      pt_batches[j] = map_func(xsimd::load(pts + i + j * simd_size, pts_mode));
+      acc_batches[j] =
+          xsimd::batch<OutputType>(N_monomials ? monomials[N_monomials - 1] : monomials[monomials_size - 1]);
+    });
+
+    // Horner steps: either compile-time unrolled or runtime loop
+    if constexpr (N_monomials != 0) {
+      // Unroll coefficient steps (descending)
+      detail::unroll_loop<N_monomials - 1>([&](auto idx) {
+        const std::size_t k = (N_monomials - 2) - idx;
+        detail::unroll_loop<OuterUnrollFactor>([&](auto j) {
+          if constexpr (std::is_floating_point_v<OutputType>) {
+            acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(monomials[k]));
+          } else {
+            auto coeffs = xsimd::batch<OutputType>(monomials[k]);
+            acc_batches[j] = {xsimd::fma(real(acc_batches[j]), pt_batches[j], real(coeffs)),
+                              xsimd::fma(imag(acc_batches[j]), pt_batches[j], imag(coeffs))};
+          }
+        });
+      });
+    } else {
+      // Runtime coefficient loop
+      for (std::size_t k = monomials_size - 1; k-- > 0;) {
+        detail::unroll_loop<OuterUnrollFactor>([&](auto j) {
+          if constexpr (std::is_floating_point_v<OutputType>) {
+            acc_batches[j] = xsimd::fma(pt_batches[j], acc_batches[j], xsimd::batch<OutputType>(monomials[k]));
+          } else {
+            auto coeffs = xsimd::batch<OutputType>(monomials[k]);
+            acc_batches[j] = {xsimd::fma(real(acc_batches[j]), pt_batches[j], real(coeffs)),
+                              xsimd::fma(imag(acc_batches[j]), pt_batches[j], imag(coeffs))};
+          }
+        });
+      }
+    }
+
+    // Store
+    detail::unroll_loop<OuterUnrollFactor>([&](auto j) { acc_batches[j].store(out + i + j * simd_size, out_mode); });
   }
 
-};
+  // Remainder
+  for (std::size_t i = trunc; i < num_points; ++i) {
+    out[i] = horner<N_monomials>(map_func(pts[i]), monomials, N_monomials ? N_monomials : monomials_size);
+  }
+}
 
 } // namespace poly_eval

@@ -46,7 +46,7 @@ int main() {
       .unit("eval")
       .warmup(1'000)
       .relative(true)
-      .minEpochIterations(10'000)
+      .minEpochIterations(20'000)
       .batch(num_points); // Set batch size based on num_points
 
   // Populate all data sets
