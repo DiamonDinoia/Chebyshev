@@ -38,13 +38,10 @@ template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(
 
 namespace poly_eval::detail {
 
-template <typename T> constexpr ALWAYS_INLINE T fma(const T& a, const T& b, const T& c) noexcept {
+template <typename T> constexpr ALWAYS_INLINE T fma(const T &a, const T &b, const T &c) noexcept {
   // Fused multiply-add: a * b + c
-  if (std::is_constant_evaluated()) {
-    if constexpr (std::is_floating_point_v<T>) {
-      return std::fma(a, b, c);
-    }
-    return a * b + c;
+  if constexpr (std::is_floating_point_v<T>) {
+    return std::fma(a, b, c);
   }
   return xsimd::fma(a, b, c);
 }
@@ -83,13 +80,44 @@ template <typename T> constexpr size_t get_alignment(const T *ptr) noexcept {
   return static_cast<size_t>(1) << detail::countr_zero(address);
 }
 
-template <typename F, std::size_t... Is>
-ALWAYS_INLINE constexpr void unroll_loop_impl(F &&func, std::index_sequence<Is...>) {
-  (func(Is), ...); // C++17 fold expression for comma operator
+// Runtime unroll implementation
+template <std::size_t Start, std::size_t Inc, typename F, std::size_t... Is>
+ALWAYS_INLINE constexpr void unroll_loop_impl_runtime(F&& func, std::index_sequence<Is...>) {
+  (func(Start + Is * Inc), ...);
 }
 
-template <std::size_t Count, typename F> ALWAYS_INLINE constexpr void unroll_loop(F &&func) {
-  unroll_loop_impl(std::forward<F>(func), std::make_index_sequence<Count>{});
+// Compile-time unroll implementation
+template <std::size_t Start, std::size_t Inc, typename F, std::size_t... Is>
+ALWAYS_INLINE constexpr void unroll_loop_impl_constexpr(F&& func, std::index_sequence<Is...>) {
+  (func.template operator()<Start + Is * Inc>(), ...);
+}
+
+// Helper: compute number of steps
+template <std::size_t Start, std::size_t Stop, std::size_t Inc>
+inline constexpr std::size_t compute_range_count =
+    (Start < Stop) ? ((Stop - Start + Inc - 1) / Inc) : 0;
+
+// Trait: detect runtime index
+template <typename F>
+using is_runtime_callable = std::is_invocable<F, std::size_t>;
+
+// Primary interface
+// Runtime version
+template <std::size_t Stop, std::size_t Start = 0, std::size_t Inc = 1, typename F,
+          std::enable_if_t<is_runtime_callable<F>::value, int> = 0>
+ALWAYS_INLINE constexpr void unroll_loop(F&& func) {
+  constexpr std::size_t Count = compute_range_count<Start, Stop, Inc>;
+  unroll_loop_impl_runtime<Start, Inc>(
+      std::forward<F>(func), std::make_index_sequence<Count>{});
+}
+
+// Compile-time version
+template <std::size_t Stop, std::size_t Start = 0, std::size_t Inc = 1, typename F,
+          std::enable_if_t<!is_runtime_callable<F>::value, int> = 0>
+ALWAYS_INLINE constexpr void unroll_loop(F&& func) {
+  constexpr std::size_t Count = compute_range_count<Start, Stop, Inc>;
+  unroll_loop_impl_constexpr<Start, Inc>(
+      std::forward<F>(func), std::make_index_sequence<Count>{});
 }
 
 constexpr double cos(const double x) noexcept {

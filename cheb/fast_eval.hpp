@@ -91,10 +91,6 @@ private:
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
   constexpr void horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
-  template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-  NO_INLINE constexpr void no_inline_horner_polyeval(const InputType *pts, OutputType *out,
-                                           std::size_t num_points) const noexcept;
-
   C20CONSTEXPR static Buffer<OutputType, N_compile_time> bjorck_pereyra(const Buffer<InputType, N_compile_time> &x,
                                                                         const Buffer<OutputType, N_compile_time> &y);
 

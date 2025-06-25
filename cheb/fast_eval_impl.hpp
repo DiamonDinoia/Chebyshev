@@ -52,8 +52,8 @@ C20CONSTEXPR FuncEval<Func, N_compile_time, Iters_compile_time>::FuncEval(Func F
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr ALWAYS_INLINE FuncEval<
-    Func, N_compile_time, Iters_compile_time>::operator()(const InputType pt) const noexcept {
+typename FuncEval<Func, N_compile_time, Iters_compile_time>::OutputType constexpr ALWAYS_INLINE
+FuncEval<Func, N_compile_time, Iters_compile_time>::operator()(const InputType pt) const noexcept {
   const auto xi = map_from_domain(pt);
   return horner<N_compile_time>(xi, monomials.data(), monomials.size()); // Pass data pointer and size
 }
@@ -69,13 +69,10 @@ ALWAYS_INLINE constexpr void FuncEval<Func, N_compile_time, Iters_compile_time>:
       pts, out, num_points, monomials.data(), monomials.size(), [this](const auto v) { return map_from_domain(v); });
 }
 
-// Batch evaluation implementation using SIMD and unrolling
-template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
-NO_INLINE constexpr void FuncEval<Func, N_compile_time, Iters_compile_time>::no_inline_horner_polyeval(
-    const InputType *RESTRICT pts, OutputType *RESTRICT out, std::size_t num_points) const noexcept {
-  return horner<N_compile_time, pts_aligned, out_aligned, OuterUnrollFactor>(
-      pts, out, num_points, monomials.data(), monomials.size(), [this](const auto v) { return map_from_domain(v); });
+// MUST be defined in a c++ source file
+// This is a workaround for the compiler to not the inline the function passed to it.
+template <typename F, typename... Args> NO_INLINE static auto noinline(F &&f, Args &&...args) {
+  return std::forward<F>(f)(std::forward<Args>(args)...);
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
@@ -99,14 +96,17 @@ ALWAYS_INLINE void constexpr FuncEval<Func, N_compile_time, Iters_compile_time>:
   } else {
     const auto pts_alignment = detail::get_alignment(pts);
     const auto out_alignment = detail::get_alignment(out);
-    if (pts_alignment != out_alignment) {
-      if (pts_alignment >= alignment) {
-        return no_inline_horner_polyeval<unroll_factor, true, false>(pts, out, num_points);
+    if (pts_alignment != out_alignment) [[unlikely]] {
+      if (pts_alignment >= alignment) [[unlikely]] {
+        return noinline(
+            [this, pts, out, num_points] { return horner_polyeval<unroll_factor, true, false>(pts, out, num_points); });
       }
-      if (out_alignment >= alignment) {
-        return no_inline_horner_polyeval<unroll_factor, false, true>(pts, out, num_points);
+      if (out_alignment >= alignment) [[unlikely]] {
+        return noinline(
+            [this, pts, out, num_points] { return horner_polyeval<unroll_factor, false, true>(pts, out, num_points); });
       }
-      return no_inline_horner_polyeval<unroll_factor, false, false>(pts, out, num_points);
+      return noinline(
+          [this, pts, out, num_points] { return horner_polyeval<unroll_factor, false, false>(pts, out, num_points); });
     }
 
     const auto unaligned_points =
