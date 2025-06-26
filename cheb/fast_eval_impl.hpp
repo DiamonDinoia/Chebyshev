@@ -114,6 +114,7 @@ ALWAYS_INLINE void constexpr FuncEval<Func, N_compile_time, Iters_compile_time>:
     constexpr std::size_t min_align = alignof(std::max_align_t); // in bytes, typically 16
     constexpr std::size_t scalar_unroll = (alignment - min_align) / sizeof(InputType);
 
+    // print alignment;
     ASSUME(unaligned_points < scalar_unroll); // tells the compiler that this loop is at most alignment
     // process scalar until we reach the first aligned point
     detail::unroll_loop<scalar_unroll>([&]<const auto i>() {

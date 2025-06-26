@@ -22,25 +22,27 @@ int main() {
   // Define the number of points to benchmark
   constexpr size_t num_points = 1024;
 
+  using T = double; // Change to float if needed
+
   // Data structures for the chosen number of points
-  alignas(64) std::array<double, num_points> random_points{};
-  alignas(64) std::array<double, num_points> output{};
-  std::vector<double> unaligned_random_points(num_points);
-  std::vector<double> unaligned_output(num_points);
-  std::vector<double, xsimd::aligned_allocator<double, 64>> aligned_random_points(num_points);
-  std::vector<double, xsimd::aligned_allocator<double, 64>> aligned_output(num_points);
+  alignas(64) std::array<T, num_points> random_points{};
+  alignas(64) std::array<T, num_points> output{};
+  std::vector<T> unaligned_random_points(num_points);
+  std::vector<T> unaligned_output(num_points);
+  std::vector<T, xsimd::aligned_allocator<T, 64>> aligned_random_points(num_points);
+  std::vector<T, xsimd::aligned_allocator<T, 64>> aligned_output(num_points);
 
   // Essential constexpr declarations (placed just before their dependent uses)
-  constexpr auto f = [](const double x) { return std::cos(x); };
-  constexpr double a = -.1;
-  constexpr double b = .1;
+  constexpr auto f = static_cast<T (*)(T)>(&std::cos);
+  constexpr T a = -.1;
+  constexpr T b = .1;
   constexpr auto degree = 16;
   // Now, declare objects that depend on the above constexprs
   const auto evaluator = poly_eval::make_func_eval(f, degree, a, b);
   C20CONSTEXPR auto fixed_evaluator = poly_eval::make_func_eval<degree>(f, a, b);
 
   // Other non-constexpr declarations that depend on previously defined constexprs
-  std::uniform_real_distribution<double> dist{a, b}; // Depends on 'a' and 'b'
+  std::uniform_real_distribution<T> dist{a, b}; // Depends on 'a' and 'b'
 
   bench.title("Monomial Vectorization Benchmark")
       .unit("eval")

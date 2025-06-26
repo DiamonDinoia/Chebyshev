@@ -22,24 +22,7 @@ constexpr bool is_constant_evaluated() noexcept {
 
 namespace poly_eval {
 
-template <typename T> struct function_traits : function_traits<decltype(&T::operator())> {};
-
-template <typename T, typename = void> struct is_tuple_like : std::false_type {};
-
-template <typename T>
-struct is_tuple_like<T, std::void_t<decltype(std::tuple_size_v<std::remove_cvref_t<T>>)>> : std::true_type {};
-
-#if __cpp_concepts >= 201907L
-template <typename T>
-concept tuple_like = is_tuple_like<T>::value;
-#endif
-
-// Convenience: size-or-zero that never hard-errors
-template <typename T, typename = void> struct tuple_size_or_zero : std::integral_constant<std::size_t, 0> {};
-
-template <typename T>
-struct tuple_size_or_zero<T, std::void_t<decltype(std::tuple_size<std::remove_cvref_t<T>>::value)>>
-    : std::integral_constant<std::size_t, std::tuple_size<std::remove_cvref_t<T>>::value> {};
+template <typename T> struct function_traits;
 
 // -----------------------------------------------------------------------------
 // Buffer: Conditional type alias for std::vector or std::array
