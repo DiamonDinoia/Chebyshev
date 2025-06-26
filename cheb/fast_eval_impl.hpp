@@ -12,8 +12,7 @@
 namespace poly_eval {
 
 namespace detail {
-// Runtime version (for compatibility with std::vector based linspace in other APIs)
-template <typename T> std::vector<T> linspace(T start, T end, int num_points) {
+template <typename T> std::vector<T> linspace(const T start, const T end, const int num_points) {
   std::vector<T> points(num_points);
   if (num_points <= 1) {
     if (num_points == 1)
@@ -81,7 +80,7 @@ ALWAYS_INLINE void constexpr FuncEval<Func, N_compile_time, Iters_compile_time>:
     const InputType * RESTRICT pts, OutputType * RESTRICT out, std::size_t num_points) const noexcept {
   // find out the alignment of pts and out
   constexpr auto simd_size = xsimd::batch<InputType>::size;
-  constexpr auto alignment = xsimd::best_arch::alignment();
+  constexpr auto alignment = xsimd::batch<InputType>::arch_type::alignment();
   constexpr auto unroll_factor = 0;
 
   const auto monomial_ptr = monomials.data();
@@ -111,11 +110,17 @@ ALWAYS_INLINE void constexpr FuncEval<Func, N_compile_time, Iters_compile_time>:
 
     const auto unaligned_points =
         std::min(((alignment - pts_alignment) & (alignment - 1)) >> detail::countr_zero(sizeof(InputType)), num_points);
-    ASSUME(unaligned_points < alignment); // tells the compiler that this loop is at most alignment
+
+    constexpr std::size_t min_align = alignof(std::max_align_t); // in bytes, typically 16
+    constexpr std::size_t scalar_unroll = (alignment - min_align) / sizeof(InputType);
+
+    ASSUME(unaligned_points < scalar_unroll); // tells the compiler that this loop is at most alignment
     // process scalar until we reach the first aligned point
-    for (auto i = 0u; i < unaligned_points; ++i) [[likely]] {
-      out[i] = operator()(pts[i]);
-    }
+    detail::unroll_loop<scalar_unroll>([&]<const auto i>() {
+      if (i < unaligned_points) {
+        out[i] = operator()(pts[i]);
+      }
+    });
     return horner_polyeval<unroll_factor, true, true>(pts + unaligned_points, out + unaligned_points,
                                                       num_points - unaligned_points);
   }
@@ -138,9 +143,6 @@ template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time
 template <class T>
 ALWAYS_INLINE constexpr T
 FuncEval<Func, N_compile_time, Iters_compile_time>::map_from_domain(const T T_arg) const noexcept {
-  if (std::is_constant_evaluated()) {
-    return static_cast<T>((2.0 * T_arg - hi) * low);
-  }
   return static_cast<T>(xsimd::fms(T(2.0), T_arg, T(hi)) * low);
 }
 
@@ -315,9 +317,9 @@ NO_INLINE C20CONSTEXPR auto make_func_eval(Func F, double eps, // eps as a runti
     FuncEval<Func, 0, Iters_compile_time> current_evaluator(F, n, a, b);
     double max_observed_error = 0.0;
     for (const auto &pt : eval_points) {
-      OutputType actual_val = F(pt);
-      OutputType poly_val = current_evaluator(pt);
-      double current_abs_error = std::abs(1.0 - poly_val / actual_val);
+      const auto actual_val = F(pt);
+      const auto poly_val = current_evaluator(pt);
+      const auto current_abs_error = std::abs(1.0 - double(poly_val) / double(actual_val));
       if (current_abs_error > max_observed_error) {
         max_observed_error = current_abs_error;
       }
