@@ -16,7 +16,7 @@ int main() {
   std::mt19937 rng{seed};
 
   // Control flags for benchmark execution
-  constexpr bool run_non_constexpr_benchmarks = false;
+  constexpr bool run_non_constexpr_benchmarks = true;
   constexpr bool run_constexpr_benchmarks = !run_non_constexpr_benchmarks;
 
   // Define the number of points to benchmark

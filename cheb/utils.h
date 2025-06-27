@@ -10,6 +10,16 @@
 
 #include "macros.h"
 
+#if __cplusplus < 202002L
+namespace std {
+template <typename T> using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
+constexpr bool is_constant_evaluated() noexcept {
+  return false; // Always returns false in pre-C++20 code
+}
+} // namespace std
+#endif
+
 namespace poly_eval {
 // -----------------------------------------------------------------------------
 // function_traits: Helper to deduce input and output types from a callable
@@ -50,8 +60,9 @@ concept tuple_like = is_tuple_like<T>::value;
 template <typename T, typename = void> struct tuple_size_or_zero : std::integral_constant<std::size_t, 0> {};
 
 template <typename T>
-struct tuple_size_or_zero<T, std::void_t<decltype(std::tuple_size<std::remove_cvref_t<T>>::value)>>
-    : std::integral_constant<std::size_t, std::tuple_size<std::remove_cvref_t<T>>::value> {};
+struct tuple_size_or_zero<T, std::void_t<decltype(std::tuple_size_v<std::remove_cvref_t<T>>)>>
+    : std::integral_constant<std::size_t, std::tuple_size_v<std::remove_cvref_t<T>>> {};
+
 
 } // namespace poly_eval
 

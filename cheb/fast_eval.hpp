@@ -4,25 +4,17 @@
 #include <cmath>
 #include <experimental/mdspan>
 #include <functional>
-#include <iostream>
 #include <type_traits>
 #include <vector>
 
 #include "macros.h"
-
-#if __cplusplus < 202002L
-namespace std {
-template <typename T> using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
-
-constexpr bool is_constant_evaluated() noexcept {
-  return false; // Always returns false in pre-C++20 code
-}
-} // namespace std
-#endif
+#include "poly_eval.h"
 
 namespace poly_eval {
 
 template <typename T> struct function_traits;
+
+template <typename T, typename> struct is_tuple_like;
 
 // -----------------------------------------------------------------------------
 // Buffer: Conditional type alias for std::vector or std::array
@@ -87,11 +79,11 @@ private:
   template <typename... EvalTypes> friend class FuncEvalMany;
 };
 
-// FuncEvalMany: evaluates multiple FuncEval instances
-// Supports both compile-time fixed degree and runtime degree
-// FuncEvalMany: evaluates multiple FuncEval instances without storing EvalTypes
+//======================================================================
+//  FuncEvalMany  –  vector-friendly wrapper over several FuncEval’s
+//======================================================================
 template <typename... EvalTypes> class FuncEvalMany {
-  static_assert(sizeof...(EvalTypes) > 0, "At least one FuncEval is required");
+  static_assert(sizeof...(EvalTypes) > 0, "At least one FuncEval type is required");
 
   using FirstEval = std::tuple_element_t<0, std::tuple<EvalTypes...>>;
   using InputType = typename FirstEval::InputType;
@@ -100,106 +92,82 @@ template <typename... EvalTypes> class FuncEvalMany {
   static constexpr std::size_t kF = sizeof...(EvalTypes);
   static constexpr std::size_t deg_max_ctime_ = std::max({EvalTypes::kDegreeCompileTime...});
 
-  // Actual degree in use (runtime if deg_max_ctime_ == 0)
-  std::size_t deg_max_ = deg_max_ctime_;
+  std::size_t deg_max_ = deg_max_ctime_; // run-time degree
 
-  // Contiguous storage for coefficients
-  Buffer<OutputType, kF * deg_max_ctime_> coeff_storage_;
-  static constexpr std::size_t dyn_extent = std::experimental::dynamic_extent;
-  using Extents = std::experimental::extents<std::size_t, kF, (deg_max_ctime_ != 0 ? deg_max_ctime_ : dyn_extent)>;
-  std::experimental::mdspan<OutputType, Extents> coeffs_;
+  // ----- column-major coefficient matrix  (rows = degree, cols = poly) -----
+  static constexpr std::size_t dyn = std::experimental::dynamic_extent;
+  using Ext = std::experimental::extents<std::size_t, (deg_max_ctime_ ? deg_max_ctime_ : dyn), kF>;
 
-  // Contiguous mapping parameters
+  Buffer<OutputType, kF * deg_max_ctime_> coeff_store_;
+  std::experimental::mdspan<OutputType, Ext, std::experimental::layout_right> coeffs_{nullptr, 1, kF};
+
+  // per-poly scaling
   std::array<InputType, kF> low_;
   std::array<InputType, kF> hi_;
 
 public:
-  // Constructor: copies low/hi, determines runtime degree, allocates and copies coefficients
-  explicit FuncEvalMany(const EvalTypes &...evals)
-      : low_{evals.low...}, hi_{evals.hi...}, coeffs_{nullptr, kF, deg_max_ctime_} {
+  // ------------------------------------------------------------------ ctor
+  explicit FuncEvalMany(const EvalTypes &...evals) : low_{evals.low...}, hi_{evals.hi...} {
     if constexpr (deg_max_ctime_ == 0) {
       deg_max_ = std::max({evals.n_terms...});
-      coeff_storage_.assign(kF * deg_max_, OutputType{});
-      coeffs_ = std::experimental::mdspan<OutputType, Extents>(coeff_storage_.data(), kF, deg_max_);
+      coeff_store_.assign(kF * deg_max_, OutputType{});
+      coeffs_ = decltype(coeffs_){coeff_store_.data(), deg_max_, kF};
     } else {
-      coeffs_ = std::experimental::mdspan<OutputType, Extents>(coeff_storage_.data(), kF, deg_max_ctime_);
+      coeffs_ = decltype(coeffs_){coeff_store_.data(), deg_max_ctime_, kF};
     }
-
     copy_coeffs<0>(evals...);
   }
 
   [[nodiscard]] std::size_t size() const noexcept { return kF; }
   [[nodiscard]] std::size_t degree() const noexcept { return deg_max_; }
 
-  // Evaluate the idx-th polynomial at x
-  [[nodiscard]] OutputType operator()(InputType x, std::size_t idx) const noexcept {
-    InputType xu = (2 * x - hi_[idx]) * low_[idx];
-    auto row = std::experimental::submdspan(coeffs_, idx, std::experimental::full_extent);
-    OutputType acc = row[deg_max_ - 1];
-    for (std::size_t k = deg_max_ - 1; k-- > 0;) {
-      acc = std::fma(acc, xu, row[k]);
-    }
-    return acc;
-  }
-
-  // Evaluate all polynomials at the same input
+  // ------------------------------------------------ broadcast : one x
   [[nodiscard]] std::array<OutputType, kF> operator()(InputType x) const noexcept {
-    std::array<OutputType, kF> results;
-    for (std::size_t i = 0; i < kF; ++i) {
-      InputType xu = (2 * x - hi_[i]) * low_[i];
-      auto row = std::experimental::submdspan(coeffs_, i, std::experimental::full_extent);
-      OutputType acc = row[deg_max_ - 1];
-      for (std::size_t k = deg_max_ - 1; k-- > 0;) {
-        acc = std::fma(acc, xu, row[k]);
-      }
-      results[i] = acc;
-    }
-    return results;
+    std::array<InputType, kF> xu;
+    for (std::size_t i = 0; i < kF; ++i)
+      xu[i] = xsimd::fms(InputType(2.0), x, hi_[i]) * low_[i];
+
+    std::array<OutputType, kF> res{};
+    horner_transposed<kF, deg_max_ctime_>(xu.data(), coeffs_.data_handle(), res.data(), kF, deg_max_);
+    return res;
   }
 
-  // Evaluate with tuple of inputs: each element maps to corresponding polynomial
-  template <typename... Ts>
-  [[nodiscard]] std::array<OutputType, kF> operator()(const std::tuple<Ts...> &inputs) const noexcept {
-    static_assert(sizeof...(Ts) == kF, "Tuple size must match number of functions");
-    std::array<InputType, kF> arr{};
-    std::apply([&](auto &&...elems) { arr = {static_cast<InputType>(elems)...}; }, inputs);
-    return operator()(arr);
+  // ------------------------------------------------ per-poly input array
+  [[nodiscard]] std::array<OutputType, kF> operator()(const std::array<InputType, kF> &xs) const noexcept {
+    std::array<InputType, kF> xu;
+    for (std::size_t i = 0; i < kF; ++i)
+      xu[i] = xsimd::fms(InputType(2.0), xs[i], hi_[i]) * low_[i];
+
+    std::array<OutputType, kF> res{};
+    horner_transposed<kF, deg_max_ctime_>(xu.data(), coeffs_.data_handle(), res.data(), kF, deg_max_);
+    return res;
   }
 
-  // Evaluate with array of inputs
-  [[nodiscard]] std::array<OutputType, kF> operator()(const std::array<InputType, kF> &inputs) const noexcept {
-    std::array<OutputType, kF> results;
-    for (std::size_t i = 0; i < kF; ++i) {
-      InputType xu = (2 * inputs[i] - hi_[i]) * low_[i];
-      auto row = std::experimental::submdspan(coeffs_, i, std::experimental::full_extent);
-      OutputType acc = row[deg_max_ - 1];
-      for (std::size_t k = deg_max_ - 1; k-- > 0;) {
-        acc = std::fma(acc, xu, row[k]);
-      }
-      results[i] = acc;
-    }
-    return results;
-  }
-
-  // Variadic inputs call
+  // ------------------------------------------------ variadic convenience
   template <typename... Ts>
   [[nodiscard]] std::array<OutputType, kF> operator()(InputType first, Ts... rest) const noexcept {
-    static_assert(1 + sizeof...(Ts) == kF, "Number of arguments must match number of functions");
+    static_assert(sizeof...(Ts) + 1 == kF, "Argument count must equal number of polynomials");
     return operator()(std::array<InputType, kF>{first, static_cast<InputType>(rest)...});
   }
 
+  // ------------------------------------------------ tuple of inputs
+  template <typename... Ts>
+  [[nodiscard]] std::array<OutputType, kF> operator()(const std::tuple<Ts...> &tup) const noexcept {
+    static_assert(sizeof...(Ts) == kF, "Tuple size must equal number of polynomials");
+    std::array<InputType, kF> xs{};
+    std::apply([&](auto &&...e) { xs = {static_cast<InputType>(e)...}; }, tup);
+    return operator()(xs);
+  }
+
 private:
-  // Recursive helper: copy and pad coefficients for polynomial I
+  // ---------- copy reversed coefficients into column-major matrix -----
   template <std::size_t I, typename FE, typename... Rest> void copy_coeffs(const FE &fe, const Rest &...rest) {
-    for (std::size_t k = 0; k < fe.n_terms; ++k) {
-      coeffs_(I, k) = fe.monomials[k];
-    }
-    for (std::size_t k = fe.n_terms; k < deg_max_; ++k) {
-      coeffs_(I, k) = OutputType{0};
-    }
-    if constexpr (I + 1 < kF) {
+    for (std::size_t k = 0; k < fe.n_terms; ++k)
+      coeffs_(k, I) = fe.monomials[k];
+    for (std::size_t k = fe.n_terms; k < deg_max_; ++k)
+      coeffs_(k, I) = OutputType{};
+    if constexpr (I + 1 < kF)
       copy_coeffs<I + 1>(rest...);
-    }
   }
 };
 

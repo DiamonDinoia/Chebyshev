@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
   bench.title("poly_eval grouped-function throughput")
       .unit("eval")
       .warmup(100)
-      .minEpochIterations(10'000)
+      .minEpochIterations(20'000)
       .batch(num_points);
 
   /* ---------- 3. run N = 1 .. 16 ----------------------------------------- */
