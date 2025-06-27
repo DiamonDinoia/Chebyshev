@@ -4,9 +4,9 @@
 #endif
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <utility>
 #include <xsimd/xsimd.hpp>
-#include <functional>
 
 #include "macros.h"
 
@@ -63,9 +63,7 @@ template <typename T>
 struct tuple_size_or_zero<T, std::void_t<decltype(std::tuple_size_v<std::remove_cvref_t<T>>)>>
     : std::integral_constant<std::size_t, std::tuple_size_v<std::remove_cvref_t<T>>> {};
 
-
 } // namespace poly_eval
-
 
 namespace poly_eval::detail {
 
@@ -75,6 +73,19 @@ template <typename T> constexpr ALWAYS_INLINE T fma(const T &a, const T &b, cons
     return std::fma(a, b, c);
   }
   return xsimd::fma(a, b, c);
+}
+
+template <typename U>
+constexpr ALWAYS_INLINE auto fma(const std::complex<U> &a, const U &b, const std::complex<U> &c) noexcept {
+  //  a * b + c  with fused ops on each component
+  return std::complex<U>{xsimd::fma(real(a), b, real(c)), xsimd::fma(imag(a), b, imag(c))};
+}
+
+template <typename U>
+constexpr ALWAYS_INLINE auto fma(const xsimd::batch<std::complex<U>> &a, const xsimd::batch<U> &b,
+                                 const xsimd::batch<std::complex<U>> &c) noexcept {
+  //  a * b + c  with fused ops on each component
+  return xsimd::batch<std::complex<U>>{xsimd::fma(real(a), b, real(c)), xsimd::fma(imag(a), b, imag(c))};
 }
 
 // std::countr_zero returns the number of trailing zero bits.
@@ -113,42 +124,78 @@ template <typename T> constexpr size_t get_alignment(const T *ptr) noexcept {
 
 // Runtime unroll implementation
 template <std::size_t Start, std::size_t Inc, typename F, std::size_t... Is>
-ALWAYS_INLINE constexpr void unroll_loop_impl_runtime(F&& func, std::index_sequence<Is...>) {
+ALWAYS_INLINE constexpr void unroll_loop_impl_runtime(F &&func, std::index_sequence<Is...>) {
   (func(Start + Is * Inc), ...);
 }
 
 // Compile-time unroll implementation
 template <std::size_t Start, std::size_t Inc, typename F, std::size_t... Is>
-ALWAYS_INLINE constexpr void unroll_loop_impl_constexpr(F&& func, std::index_sequence<Is...>) {
+ALWAYS_INLINE constexpr void unroll_loop_impl_constexpr(F &&func, std::index_sequence<Is...>) {
   (func.template operator()<Start + Is * Inc>(), ...);
 }
 
 // Helper: compute number of steps
 template <std::size_t Start, std::size_t Stop, std::size_t Inc>
-inline constexpr std::size_t compute_range_count =
-    (Start < Stop) ? ((Stop - Start + Inc - 1) / Inc) : 0;
+inline constexpr std::size_t compute_range_count = (Start < Stop) ? ((Stop - Start + Inc - 1) / Inc) : 0;
 
 // Trait: detect runtime index
-template <typename F>
-using is_runtime_callable = std::is_invocable<F, std::size_t>;
+template <typename F> using is_runtime_callable = std::is_invocable<F, std::size_t>;
 
 // Primary interface
 // Runtime version
 template <std::size_t Stop, std::size_t Start = 0, std::size_t Inc = 1, typename F,
           std::enable_if_t<is_runtime_callable<F>::value, int> = 0>
-ALWAYS_INLINE constexpr void unroll_loop(F&& func) {
+ALWAYS_INLINE constexpr void unroll_loop(F &&func) {
   constexpr std::size_t Count = compute_range_count<Start, Stop, Inc>;
-  unroll_loop_impl_runtime<Start, Inc>(
-      std::forward<F>(func), std::make_index_sequence<Count>{});
+  unroll_loop_impl_runtime<Start, Inc>(std::forward<F>(func), std::make_index_sequence<Count>{});
 }
 
 // Compile-time version
 template <std::size_t Stop, std::size_t Start = 0, std::size_t Inc = 1, typename F,
           std::enable_if_t<!is_runtime_callable<F>::value, int> = 0>
-ALWAYS_INLINE constexpr void unroll_loop(F&& func) {
+ALWAYS_INLINE constexpr void unroll_loop(F &&func) {
   constexpr std::size_t Count = compute_range_count<Start, Stop, Inc>;
-  unroll_loop_impl_constexpr<Start, Inc>(
-      std::forward<F>(func), std::make_index_sequence<Count>{});
+  unroll_loop_impl_constexpr<Start, Inc>(std::forward<F>(func), std::make_index_sequence<Count>{});
+}
+
+template <class T, uint8_t N = 1> constexpr uint8_t min_simd_width() {
+  // finds the smallest simd width that can handle N elements
+  // simd size is batch size the SIMD width in xsimd terminology
+  if constexpr (std::is_void_v<xsimd::make_sized_batch_t<T, N>>) {
+    return min_simd_width<T, N * 2>();
+  } else {
+    return N;
+  }
+};
+
+template <typename T> constexpr uint8_t best_simd(std::size_t N) {
+  // must have at least 2-wide SIMD on this arch
+  constexpr uint8_t max_w = xsimd::batch<T, xsimd::best_arch>::size;
+  static_assert(max_w >= 2, "Need at least 2-wide SIMD for this type/arch");
+
+  // start at the smallest vector width (at least 2)
+  uint8_t min_w = std::max<uint8_t>(min_simd_width<T>(), 2);
+  uint8_t chosen = min_w;
+
+  // only consider widths up to N
+  for (uint8_t w = min_w; w <= max_w; w <<= 1) {
+    if (w > N)
+      break;
+
+    std::size_t groups = (N + w - 1) / w;
+    std::size_t padding = groups * w - N;
+
+    // accept any w that wastes ≤ w/2 lanes
+    if (padding <= w / 2) {
+      chosen = w;
+    }
+  }
+
+  return chosen;
+}
+
+template <typename T, std::size_t N> uint8_t alignment() {
+  return xsimd::make_sized_batch_t<T, N>::arch_type::alignment();
 }
 
 constexpr double cos(const double x) noexcept {

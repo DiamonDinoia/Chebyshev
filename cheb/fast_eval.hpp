@@ -22,6 +22,11 @@ template <typename T, typename> struct is_tuple_like;
 template <typename T, std::size_t N_compile_time_val>
 using Buffer = std::conditional_t<N_compile_time_val == 0, std::vector<T>, std::array<T, N_compile_time_val>>;
 
+template <typename T, std::size_t N_compile_time_val, std::size_t alignment>
+using AlignedBuffer =
+    std::conditional_t<N_compile_time_val == 0, std::vector<T, xsimd::aligned_allocator<T, alignment>>,
+                       std::array<T, N_compile_time_val>>;
+
 // -----------------------------------------------------------------------------
 // Forward declarations for FuncEvalMany
 template <typename... EvalTypes> class FuncEvalMany;
@@ -80,7 +85,7 @@ private:
 };
 
 //======================================================================
-//  FuncEvalMany  –  vector-friendly wrapper over several FuncEval’s
+//  FuncEvalMany – evaluates several FuncEval’s with SIMD-friendly layout
 //======================================================================
 template <typename... EvalTypes> class FuncEvalMany {
   static_assert(sizeof...(EvalTypes) > 0, "At least one FuncEval type is required");
@@ -89,64 +94,84 @@ template <typename... EvalTypes> class FuncEvalMany {
   using InputType = typename FirstEval::InputType;
   using OutputType = typename FirstEval::OutputType;
 
+  // real number of polynomials
   static constexpr std::size_t kF = sizeof...(EvalTypes);
+
+  // SIMD width we target (4 doubles for AVX2)
+  static constexpr std::size_t kSimd = 4;
+  static constexpr std::size_t kF_pad = kF > (kSimd / 2) ? (kF + kSimd - 1) & (-kSimd) : kF;
+  static constexpr std::size_t vector_width = kF % kSimd == 0 ? kSimd : 0;
+  ;
+  // max compile-time degree across EvalTypes
   static constexpr std::size_t deg_max_ctime_ = std::max({EvalTypes::kDegreeCompileTime...});
 
-  std::size_t deg_max_ = deg_max_ctime_; // run-time degree
+  // run-time degree (used only if deg_max_ctime_==0)
+  std::size_t deg_max_ = deg_max_ctime_;
 
-  // ----- column-major coefficient matrix  (rows = degree, cols = poly) -----
+  // ── column-major coefficient matrix (deg × kF_pad) ────────────────
   static constexpr std::size_t dyn = std::experimental::dynamic_extent;
-  using Ext = std::experimental::extents<std::size_t, (deg_max_ctime_ ? deg_max_ctime_ : dyn), kF>;
+  using Ext = std::experimental::extents<std::size_t, (deg_max_ctime_ ? deg_max_ctime_ : dyn), kF_pad>;
 
-  Buffer<OutputType, kF * deg_max_ctime_> coeff_store_;
-  std::experimental::mdspan<OutputType, Ext, std::experimental::layout_right> coeffs_{nullptr, 1, kF};
+  Buffer<OutputType, kF_pad * deg_max_ctime_> coeff_store_;
+  std::experimental::mdspan<OutputType, Ext> coeffs_{nullptr, 1, kF_pad};
 
-  // per-poly scaling
-  std::array<InputType, kF> low_;
-  std::array<InputType, kF> hi_;
+  // per-polynomial scaling data (padded)
+  std::array<InputType, kF_pad> low_{};
+  std::array<InputType, kF_pad> hi_{};
 
 public:
   // ------------------------------------------------------------------ ctor
-  explicit FuncEvalMany(const EvalTypes &...evals) : low_{evals.low...}, hi_{evals.hi...} {
+  explicit FuncEvalMany(const EvalTypes &...evals) {
+    // copy real low/hi … then identity for padding lanes
+    auto tmp_low = std::array<InputType, kF>{evals.low...};
+    auto tmp_hi = std::array<InputType, kF>{evals.hi...};
+    for (std::size_t i = 0; i < kF; ++i) {
+      low_[i] = tmp_low[i];
+      hi_[i] = tmp_hi[i];
+    }
+
+    // degree & storage
     if constexpr (deg_max_ctime_ == 0) {
       deg_max_ = std::max({evals.n_terms...});
-      coeff_store_.assign(kF * deg_max_, OutputType{});
-      coeffs_ = decltype(coeffs_){coeff_store_.data(), deg_max_, kF};
+      coeff_store_.assign(kF_pad * deg_max_, OutputType{});
+      coeffs_ = decltype(coeffs_){coeff_store_.data(), deg_max_, kF_pad};
     } else {
-      coeffs_ = decltype(coeffs_){coeff_store_.data(), deg_max_ctime_, kF};
+      coeffs_ = decltype(coeffs_){coeff_store_.data(), deg_max_ctime_, kF_pad};
     }
-    copy_coeffs<0>(evals...);
+
+    copy_coeffs<0>(evals...); // real columns
+    zero_pad_coeffs();        // dummy columns
   }
 
   [[nodiscard]] std::size_t size() const noexcept { return kF; }
   [[nodiscard]] std::size_t degree() const noexcept { return deg_max_; }
 
-  // ------------------------------------------------ broadcast : one x
+  // ---------------------------------------------------------------- broadcast
   [[nodiscard]] std::array<OutputType, kF> operator()(InputType x) const noexcept {
-    std::array<InputType, kF> xu;
+    std::array<InputType, kF_pad> xu{};
     for (std::size_t i = 0; i < kF; ++i)
       xu[i] = xsimd::fms(InputType(2.0), x, hi_[i]) * low_[i];
-
-    std::array<OutputType, kF> res{};
-    horner_transposed<kF, deg_max_ctime_>(xu.data(), coeffs_.data_handle(), res.data(), kF, deg_max_);
-    return res;
+    std::array<OutputType, kF_pad> res{};
+    horner_transposed<kF_pad, deg_max_ctime_, vector_width>(xu.data(), coeffs_.data_handle(), res.data(), kF_pad,
+                                                            deg_max_);
+    return extract_real(res);
   }
 
   // ------------------------------------------------ per-poly input array
   [[nodiscard]] std::array<OutputType, kF> operator()(const std::array<InputType, kF> &xs) const noexcept {
-    std::array<InputType, kF> xu;
+    std::array<InputType, kF_pad> xu{};
     for (std::size_t i = 0; i < kF; ++i)
       xu[i] = xsimd::fms(InputType(2.0), xs[i], hi_[i]) * low_[i];
-
-    std::array<OutputType, kF> res{};
-    horner_transposed<kF, deg_max_ctime_>(xu.data(), coeffs_.data_handle(), res.data(), kF, deg_max_);
-    return res;
+    std::array<OutputType, kF_pad> res{};
+    horner_transposed<kF_pad, deg_max_ctime_, vector_width>(xu.data(), coeffs_.data_handle(), res.data(), kF_pad,
+                                                            deg_max_);
+    return extract_real(res);
   }
 
-  // ------------------------------------------------ variadic convenience
+  // ---------------------------------------------- variadic convenience
   template <typename... Ts>
   [[nodiscard]] std::array<OutputType, kF> operator()(InputType first, Ts... rest) const noexcept {
-    static_assert(sizeof...(Ts) + 1 == kF, "Argument count must equal number of polynomials");
+    static_assert(sizeof...(Ts) + 1 == kF, "Incorrect number of arguments");
     return operator()(std::array<InputType, kF>{first, static_cast<InputType>(rest)...});
   }
 
@@ -160,14 +185,29 @@ public:
   }
 
 private:
-  // ---------- copy reversed coefficients into column-major matrix -----
+  // --------------- copy actual coefficients to column-major matrix ---
   template <std::size_t I, typename FE, typename... Rest> void copy_coeffs(const FE &fe, const Rest &...rest) {
     for (std::size_t k = 0; k < fe.n_terms; ++k)
       coeffs_(k, I) = fe.monomials[k];
     for (std::size_t k = fe.n_terms; k < deg_max_; ++k)
-      coeffs_(k, I) = OutputType{};
+      coeffs_(k, I) = OutputType{0};
     if constexpr (I + 1 < kF)
       copy_coeffs<I + 1>(rest...);
+  }
+
+  // --------------- zero-pad remaining columns -----------------------
+  void zero_pad_coeffs() {
+    for (std::size_t j = kF; j < kF_pad; ++j)
+      for (std::size_t k = 0; k < deg_max_; ++k)
+        coeffs_(k, j) = OutputType{};
+  }
+
+  // --------------- slice the first kF results -----------------------
+  [[nodiscard]] std::array<OutputType, kF> extract_real(const std::array<OutputType, kF_pad> &full) const noexcept {
+    std::array<OutputType, kF> out{};
+    for (std::size_t i = 0; i < kF; ++i)
+      out[i] = full[i];
+    return out;
   }
 };
 

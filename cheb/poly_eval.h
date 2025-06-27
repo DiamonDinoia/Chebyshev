@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <iostream>
 #include <xsimd/xsimd.hpp>
 
 namespace poly_eval {
@@ -16,23 +17,13 @@ ALWAYS_INLINE constexpr OutputType horner(const InputType x, const OutputType *c
     // Compile-time unrolled Horner on reversed array
     // Start with highest-degree term at c_ptr[0]
     OutputType acc = c_ptr[0];
-    detail::unroll_loop<N_total, 1>([&]<std::size_t k>() {
-      if constexpr (std::is_floating_point_v<OutputType>) {
-        acc = detail::fma(acc, x, c_ptr[k]);
-      } else {
-        acc = OutputType{detail::fma(real(acc), x, real(c_ptr[k])), detail::fma(imag(acc), x, imag(c_ptr[k]))};
-      }
-    });
+    detail::unroll_loop<N_total, 1>([&]<std::size_t k>() { acc = detail::fma(acc, x, c_ptr[k]); });
     return acc;
   } else {
     // Runtime iterative Horner on reversed array
     OutputType acc = c_ptr[0];
     for (std::size_t k = 1; k < c_size; ++k) {
-      if constexpr (std::is_floating_point_v<OutputType>) {
-        acc = detail::fma(acc, x, c_ptr[k]);
-      } else {
-        acc = OutputType{detail::fma(real(acc), x, real(c_ptr[k])), detail::fma(imag(acc), x, imag(c_ptr[k]))};
-      }
+      acc = detail::fma(acc, x, c_ptr[k]);
     }
     return acc;
   }
@@ -158,133 +149,160 @@ ALWAYS_INLINE constexpr void horner_many(const InputType x,              // inpu
 }
 
 //==============================================================================
-//  horner_transposed – column-major, reversed Horner
+//  horner_transposed – column-major, reversed Horner, optional SIMD width
 //==============================================================================
 //
 //  •  M_total (#polynomials)    0 → run-time M
 //  •  N_total (#coefficients)   0 → run-time N
+//  •  simd_width                0 → no vectorization, otherwise must divide M
 //
 //  Both loops are fully un-rolled when the corresponding template
-//  parameter is non-zero.
-//------------------------------------------------------------------------------
-template <std::size_t M_total = 0,                                // #polynomials (0 → run-time)
-          std::size_t N_total = 0,                                // degree        (0 → run-time)
-          typename Out,                                           // OutputType
-          typename In>                                            // InputType
-ALWAYS_INLINE constexpr void horner_transposed(const In *x,       // [M] scaled inputs
-                                               const Out *c,      // [M*N] coeffs (col-major, reversed)
-                                               Out *out,          // [M] results
-                                               std::size_t M = 0, // run-time M
-                                               std::size_t N = 0) // run-time N
-    noexcept {
-  const std::size_t m_lim = M_total ? M_total : M;
-  const std::size_t n_lim = N_total ? N_total : N;
+//  parameter is non-zero. If simd_width>0 we process M in blocks of simd_width
+//  using xsimd::make_sized_batch_t<In,simd_width>, and when M_total>0 we also
+//  unroll those chunk loops via detail::unroll_loop.
+//
+template <std::size_t M_total = 0,    // #polynomials (0 → run‑time M)
+          std::size_t N_total = 0,    // degree        (0 → run‑time N)
+          std::size_t simd_width = 0, // 0 → scalar, >0 → use xsimd batches
+          typename Out,
+          typename In>
+ALWAYS_INLINE constexpr void horner_transposed(const In *x,       // [M] scaled inputs (one per polynomial)
+                                               const Out *c,      // [M*N] coeffs (col‑major, reversed)
+                                               Out *out,          // [M]   results
+                                               std::size_t M = 0, // run‑time M
+                                               std::size_t N = 0  // run‑time N
+                                               ) noexcept {
+  constexpr bool has_Mt = (M_total != 0);
+  constexpr bool has_Nt = (N_total != 0);
+  constexpr bool do_simd = (simd_width > 0);
+
+  const std::size_t m_lim = has_Mt ? M_total : M;
+  const std::size_t n_lim = has_Nt ? N_total : N;
   const std::size_t stride = m_lim; // elems per column
 
-  // –––––––––––– initialise accumulators with degree-0 column ––––––––––––
-  if constexpr (M_total != 0) {
-    detail::unroll_loop<M_total>([&]<std::size_t i>() constexpr { out[i] = c[i]; });
-  } else {
-    for (std::size_t i = 0; i < m_lim; ++i)
-      out[i] = c[i];
-  }
+  if constexpr (do_simd) {
+    //------------------------------------------------------------------------
+    // SIMD path – keep everything in registers for all degrees
+    //------------------------------------------------------------------------
+    using batch_in = xsimd::make_sized_batch_t<In, simd_width>;
+    using batch_out = xsimd::make_sized_batch_t<Out, simd_width>;
 
-  // helper for one degree step (used in both branches below)
-  const auto step_degree = [&](const std::size_t k) {
-    const Out *col = c + k * stride;
-    if constexpr (M_total != 0) {
-      detail::unroll_loop<M_total>([&]<std::size_t i>() constexpr { out[i] = detail::fma(out[i], x[i], col[i]); });
+    // compile‑time guard
+    static_assert(!has_Mt || (M_total % simd_width == 0), "M_total must be a multiple of simd_width when simd_width>0");
+
+
+
+    //------------------------------------------------------------------
+    // 1. Allocate per‑chunk accumulators and (optionally) cached x
+    //------------------------------------------------------------------
+    if constexpr (has_Mt) {
+      // Compile‑time number of chunks → use std::array and unroll
+      constexpr std::size_t C = M_total / simd_width;
+      std::array<batch_out, C> acc{};
+      std::array<batch_in, C> xvec{};
+
+      // Load x once and initialise acc with degree‑0 column
+      detail::unroll_loop<C>([&]<std::size_t ci>() constexpr {
+        constexpr std::size_t base = ci * simd_width;
+        xvec[ci] = batch_in ::load_unaligned(x + base);
+        acc[ci] = batch_out::load_unaligned(c + base); // k = 0
+      });
+
+      //------------------------------------------------------------------
+      // 2. Horner recursion over remaining degrees (k = 1 … n_lim‑1)
+      //------------------------------------------------------------------
+      if constexpr (has_Nt) {
+        detail::unroll_loop<N_total, 1>([&]<std::size_t k>() constexpr {
+          if constexpr (k > 0) {
+            constexpr std::size_t col_offset = k * stride;
+            detail::unroll_loop<C>([&]<std::size_t ci>() constexpr {
+              constexpr std::size_t base = ci * simd_width;
+              batch_out ck = batch_out::load_unaligned(c + col_offset + base);
+              acc[ci] = detail::fma(acc[ci], xvec[ci], ck);
+            });
+          }
+        });
+      } else {
+        for (std::size_t k = 1; k < n_lim; ++k) {
+          const Out *col = c + k * stride;
+          detail::unroll_loop<C>([&]<std::size_t ci>() constexpr {
+            constexpr std::size_t base = ci * simd_width;
+            batch_out ck = batch_out::load_unaligned(col + base);
+            acc[ci] = detail::fma(acc[ci], xvec[ci], ck);
+          });
+        }
+      }
+
+      //------------------------------------------------------------------
+      // 3. Final store of the accumulators into `out`
+      //------------------------------------------------------------------
+      detail::unroll_loop<C>([&]<std::size_t ci>() constexpr {
+        constexpr std::size_t base = ci * simd_width;
+        acc[ci].store_unaligned(out + base);
+      });
+    } else {
+
+      const std::size_t chunks = m_lim / simd_width;
+
+      // Runtime number of chunks → use std::vector + normal loops
+      std::vector<batch_out> acc(chunks);
+      std::vector<batch_in> xvec(chunks);
+
+      // Load x once and initialise acc with degree‑0 column
+      for (std::size_t ci = 0; ci < chunks; ++ci) {
+        std::size_t base = ci * simd_width;
+        xvec[ci] = batch_in ::load_unaligned(x + base);
+        acc[ci] = batch_out::load_unaligned(c + base);
+      }
+
+      // Horner recursion – keep everything in registers
+      for (std::size_t k = 1; k < n_lim; ++k) {
+        const Out *col = c + k * stride;
+        for (std::size_t ci = 0; ci < chunks; ++ci) {
+          std::size_t base = ci * simd_width;
+          batch_out ck = batch_out::load_unaligned(col + base);
+          acc[ci] = detail::fma(acc[ci], xvec[ci], ck);
+        }
+      }
+
+      // Single final store
+      for (std::size_t ci = 0; ci < chunks; ++ci) {
+        std::size_t base = ci * simd_width;
+        acc[ci].store_unaligned(out + base);
+      }
+    }
+  } else {
+    //------------------------------------------------------------------------
+    // Scalar path (original implementation)
+    //------------------------------------------------------------------------
+    // 1. Initialise accumulators with degree‑0 column
+    if constexpr (has_Mt) {
+      detail::unroll_loop<M_total>([&]<std::size_t i>() constexpr { out[i] = c[i]; });
     } else {
       for (std::size_t i = 0; i < m_lim; ++i)
-        out[i] = detail::fma(out[i], x[i], col[i]);
+        out[i] = c[i];
     }
-  };
 
-  // –––––––––––– Horner recursion over remaining degrees ––––––––––––––––
-  if constexpr (N_total != 0) {
-    detail::unroll_loop<N_total, 1>([&]<std::size_t k>() constexpr { step_degree(k); });
-  } else {
-    for (std::size_t k = 1; k < n_lim; ++k) {
-      step_degree(k);
+    // 2. Horner recursion – scalar
+    const auto step = [&](std::size_t k) noexcept {
+      const Out *col = c + k * stride;
+      if constexpr (has_Mt) {
+        detail::unroll_loop<M_total>([&]<std::size_t i>() constexpr { out[i] = detail::fma(out[i], x[i], col[i]); });
+      } else {
+        for (std::size_t i = 0; i < m_lim; ++i)
+          out[i] = detail::fma(out[i], x[i], col[i]);
+      }
+    };
+
+    if constexpr (has_Nt) {
+      detail::unroll_loop<N_total, 1>([&]<std::size_t k>() constexpr {
+        if constexpr (k > 0)
+          step(k);
+      });
+    } else {
+      for (std::size_t k = 1; k < n_lim; ++k)
+        step(k);
     }
   }
 }
-
-/*
-   // --------------------------- size bookkeeping ------------------------------
-const std::size_t m_lim = M_total ? M_total : M;
-const std::size_t n_lim = N_total ? N_total : N;
-
-// Runtime UNROLL (ignored if template UNROLL > 0)
-const std::size_t UN = (UNROLL > 0) ? UNROLL
-                                    : ((unroll_rt > 0) ? unroll_rt : 1);
-
-// --------------------------- helpers ---------------------------------------
-auto step_fma = [&](auto& acc, const OutputType& c) {
-  if constexpr (std::is_floating_point_v<OutputType>) {
-    acc = detail::fma(acc, x, c);
-  } else {          // complex / struct with .real/.imag
-    acc = OutputType{detail::fma(real(acc), x, real(c)),
-                     detail::fma(imag(acc), x, imag(c))};
-  }
-};
-
-// ----------------------- main evaluation loop -----------------------------
-const std::size_t m_trunc = m_lim / UN * UN;   // largest multiple of UN
-
-// ---- batched section ------------------------------------------------------
-for (std::size_t base = 0; base < m_trunc; base += UN) {
-
-  // ---- initialise accumulators with highest-degree term -------------------
-  OutputType acc[UN];
-  if constexpr (UNROLL > 0) {
-    detail::unroll_loop<UNROLL>([&]<std::size_t j>() {
-      acc[j] = coeffs[(base + j) * n_lim];
-    });
-  } else {
-    for (std::size_t j = 0; j < UN; ++j)
-      acc[j] = coeffs[(base + j) * n_lim];
-  }
-
-  // ---- Horner iterations --------------------------------------------------
-  if constexpr (N_total > 0) {
-    detail::unroll_loop<N_total, 1>([&]<std::size_t k>() {
-      if constexpr (UNROLL > 0) {
-        detail::unroll_loop<UNROLL>([&]<std::size_t j>() {
-          step_fma(acc[j], coeffs[(base + j) * n_lim + k]);
-        });
-      } else {
-        for (std::size_t j = 0; j < UN; ++j)
-          step_fma(acc[j], coeffs[(base + j) * n_lim + k]);
-      }
-    });
-  } else {
-    for (std::size_t k = 1; k < n_lim; ++k) {
-      if constexpr (UNROLL > 0) {
-        detail::unroll_loop<UNROLL>([&]<std::size_t j>() {
-          step_fma(acc[j], coeffs[(base + j) * n_lim + k]);
-        });
-      } else {
-        for (std::size_t j = 0; j < UN; ++j)
-          step_fma(acc[j], coeffs[(base + j) * n_lim + k]);
-      }
-    }
-  }
-
-  // ---- write results ------------------------------------------------------
-  if constexpr (UNROLL > 0) {
-    detail::unroll_loop<UNROLL>([&]<std::size_t j>() {
-      out[base + j] = acc[j];
-    });
-  } else {
-    for (std::size_t j = 0; j < UN; ++j)
-      out[base + j] = acc[j];
-  }
-}
-
-// ---- tail ( < UN polynomials ) -------------------------------------------
-for (std::size_t m = m_trunc; m < m_lim; ++m)
-  out[m] = horner<N_total>(x, coeffs + m * n_lim, n_lim);
-  */
-// }
 } // namespace poly_eval
