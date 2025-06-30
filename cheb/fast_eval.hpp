@@ -98,10 +98,13 @@ template <typename... EvalTypes> class FuncEvalMany {
   static constexpr std::size_t kF = sizeof...(EvalTypes);
 
   // SIMD width we target (4 doubles for AVX2)
-  static constexpr std::size_t kSimd = 4;
-  static constexpr std::size_t kF_pad = kF > (kSimd / 2) ? (kF + kSimd - 1) & (-kSimd) : kF;
-  static constexpr std::size_t vector_width = kF % kSimd == 0 ? kSimd : 0;
-  ;
+  static constexpr std::size_t kSimd = kF == 1 ? 1 : detail::best_simd<InputType>(kF);
+  static constexpr std::size_t kF_pad = (kF + kSimd - 1) & (-kSimd);
+  static constexpr std::size_t vector_width = kSimd > 1 ? kSimd : 0; // 1 if no SIMD, otherwise kSimd
+
+  static_assert(kSimd == 1 || !std::is_void_v<xsimd::make_sized_batch_t<InputType, kSimd>>,
+                "Best SIMD width must be valid for the given type T");
+
   // max compile-time degree across EvalTypes
   static constexpr std::size_t deg_max_ctime_ = std::max({EvalTypes::kDegreeCompileTime...});
 
@@ -122,6 +125,8 @@ template <typename... EvalTypes> class FuncEvalMany {
 public:
   // ------------------------------------------------------------------ ctor
   explicit FuncEvalMany(const EvalTypes &...evals) {
+    std::cout << "FuncEvalMany: kF = " << kF << ", kF_pad = " << kF_pad
+              << ", vector_width = " << vector_width << ", deg_max_ctime_ = " << deg_max_ctime_ << '\n';
     // copy real low/hi … then identity for padding lanes
     auto tmp_low = std::array<InputType, kF>{evals.low...};
     auto tmp_hi = std::array<InputType, kF>{evals.hi...};

@@ -168,29 +168,24 @@ template <class T, uint8_t N = 1> constexpr uint8_t min_simd_width() {
   }
 };
 
-template <typename T> constexpr uint8_t best_simd(std::size_t N) {
-  // must have at least 2-wide SIMD on this arch
+template <typename T>
+constexpr uint8_t best_simd(std::size_t N) {
+  // make sure there's at least a 2-lane SIMD on this arch:
   constexpr uint8_t max_w = xsimd::batch<T, xsimd::best_arch>::size;
-  static_assert(max_w >= 2, "Need at least 2-wide SIMD for this type/arch");
+  static_assert(max_w >= 2, "Need at least 2-wide SIMD for this T/arch");
 
   // start at the smallest vector width (at least 2)
-  uint8_t min_w = std::max<uint8_t>(min_simd_width<T>(), 2);
-  uint8_t chosen = min_w;
+  uint8_t chosen = std::max<uint8_t>(min_simd_width<T>(), 2);
 
-  // only consider widths up to N
-  for (uint8_t w = min_w; w <= max_w; w <<= 1) {
-    if (w > N)
-      break;
-
-    std::size_t groups = (N + w - 1) / w;
+  // **NO** early break on w > N any more
+  for (uint8_t w = chosen; w <= max_w; w <<= 1) {
+    std::size_t groups  = (N + w - 1) / w;
     std::size_t padding = groups * w - N;
-
     // accept any w that wastes ≤ w/2 lanes
-    if (padding <= w / 2) {
-      chosen = w;
+    if (padding <= w/2) {
+      chosen = w;  // keep bumping up to the largest “good enough” width
     }
   }
-
   return chosen;
 }
 
