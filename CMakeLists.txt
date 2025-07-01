@@ -8,13 +8,13 @@ project(ChebyshevND LANGUAGES CXX)
 set(CPM_DOWNLOAD_VERSION 0.42.0)
 set(CPM_HASH_SUM "2020b4fc42dba44817983e06342e682ecfc3d2f484a581f11cc5731fbe4dce8a")
 
-if(CPM_SOURCE_CACHE)
+if (CPM_SOURCE_CACHE)
     set(CPM_DOWNLOAD_LOCATION "${CPM_SOURCE_CACHE}/cpm/CPM_${CPM_DOWNLOAD_VERSION}.cmake")
-elseif(DEFINED ENV{CPM_SOURCE_CACHE})
+elseif (DEFINED ENV{CPM_SOURCE_CACHE})
     set(CPM_DOWNLOAD_LOCATION "$ENV{CPM_SOURCE_CACHE}/cpm/CPM_${CPM_DOWNLOAD_VERSION}.cmake")
-else()
+else ()
     set(CPM_DOWNLOAD_LOCATION "${CMAKE_BINARY_DIR}/cmake/CPM_${CPM_DOWNLOAD_VERSION}.cmake")
-endif()
+endif ()
 
 # Expand relative path. This is important if the provided path contains a tilde (~)
 get_filename_component(CPM_DOWNLOAD_LOCATION ${CPM_DOWNLOAD_LOCATION} ABSOLUTE)
@@ -26,12 +26,19 @@ file(DOWNLOAD
 
 include(${CPM_DOWNLOAD_LOCATION})
 
-CPMAddPackage(
-        NAME nda
-        GITHUB_REPOSITORY DiamonDinoia/nda
-        GIT_TAG refactor-cmake
-)
+option(ENABLE_CHEBYSHEV_ND "Enable Chebyshev ND" OFF)
 
+if (ENABLE_CHEBYSHEV_ND)
+    CPMAddPackage(
+            NAME nda
+            GITHUB_REPOSITORY DiamonDinoia/nda
+            GIT_TAG refactor-cmake
+    )
+
+    target_link_libraries(chebyshev_nd PRIVATE nda::nda_c)
+    target_include_directories(chebyshev_nd PRIVATE ${nda_SOURCE_DIR}/include)
+    target_compile_features(chebyshev_nd PRIVATE cxx_std_20)
+endif ()
 
 CPMAddPackage(
         NAME xsimd
@@ -57,10 +64,6 @@ target_link_libraries(cheb INTERFACE xsimd std::mdspan)
 # ─────────────────────────────────────────────
 # Build executable
 add_executable(chebyshev_nd main.cpp)
-
-target_link_libraries(chebyshev_nd PRIVATE nda::nda_c)
-target_include_directories(chebyshev_nd PRIVATE ${nda_SOURCE_DIR}/include)
-target_compile_features(chebyshev_nd PRIVATE cxx_std_20)
 
 add_executable(chebyshev_1d cheb1d.cpp)
 target_compile_features(chebyshev_1d PRIVATE cxx_std_20)
