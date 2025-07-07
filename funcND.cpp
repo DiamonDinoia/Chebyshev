@@ -215,26 +215,35 @@ private:
 };
 } // namespace poly_eval
 
-// ============================================================================
-// Optional quick test (compile with -DPOLY_EVAL_ND_TEST)
-// ============================================================================
 #include <iomanip>
 #include <iostream>
 int main() {
   using namespace poly_eval;
   using VecD = std::vector<double>;
-  auto F = [](VecD const &x) -> VecD { return {x[0] + x[1], x[0] * x[1]}; };
-  VecD lo = {-1, -1}, hi = {1, 1};
-  std::vector<std::size_t> deg = {4, 4};
+  auto F = [](VecD const &x) -> VecD { return {std::cos(x[0]), std::sin(x[1]), std::cos(x[2]), std::sin(x[3])}; };
+  VecD lo = {-1, -1, -1, -1}, hi = {1, 1, 1, 1};
+  std::vector<std::size_t> deg = {15, 15, 15, 15};
 
   FuncEvalND interp(F, lo, hi, deg);
   std::cout << std::fixed << std::setprecision(4);
   for (double x = -1; x <= 1; x += 0.5)
     for (double y = -1; y <= 1; y += 0.5) {
-      auto v = interp({x, y});
-      auto e = F({x, y});
+      auto v = interp({x, y, x, y});
+      auto e = F({x, y, x, y});
       std::cout << "(" << x << "," << y << ") -> {" << v[0] << "," << v[1] << "}  exact {" << e[0] << "," << e[1]
                 << "}\n";
+      std::cout << "(" << x << "," << y << ") -> {" << v[2] << "," << v[3] << "}  exact {" << e[2] << "," << e[3]
+                << "}\n";
+      std::cout << "----------------------------------------\n";
+      // max relative error
+      double err = 0;
+      for (int i = 0; i < 4; ++i) {
+        err = std::max(err, std::abs(1.0 - e[i] / v[i]));
+      }
+      std::cout << "max relative error: " << err << "\n";
+      // max absolute error
+      err = 0;
     }
+
   return 0;
 }
