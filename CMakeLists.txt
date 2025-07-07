@@ -28,12 +28,12 @@ include(${CPM_DOWNLOAD_LOCATION})
 
 option(ENABLE_CHEBYSHEV_ND "Enable Chebyshev ND" OFF)
 
+CPMAddPackage(
+        NAME nda
+        GITHUB_REPOSITORY DiamonDinoia/nda
+        GIT_TAG refactor-cmake
+)
 if (ENABLE_CHEBYSHEV_ND)
-    CPMAddPackage(
-            NAME nda
-            GITHUB_REPOSITORY DiamonDinoia/nda
-            GIT_TAG refactor-cmake
-    )
 
     target_link_libraries(chebyshev_nd PRIVATE nda::nda_c)
     target_include_directories(chebyshev_nd PRIVATE ${nda_SOURCE_DIR}/include)
@@ -120,4 +120,4 @@ target_link_libraries(poly_eval PRIVATE cheb)
 add_executable(funcND funcND.cpp)
 target_compile_features(funcND PRIVATE cxx_std_20)
 target_compile_options(funcND PRIVATE -march=native)
-target_link_libraries(funcND PRIVATE cheb)
+target_link_libraries(funcND PRIVATE cheb nda::nda_c)

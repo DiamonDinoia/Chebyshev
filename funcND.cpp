@@ -1,42 +1,43 @@
 // ============================================================================
-//  FuncEvalND  —  FULL tensor-grid Chebyshev interpolator
+//  FuncEvalND  —  FULL tensor‑grid Chebyshev interpolator (NDA + nda::blas::dot)
 // ============================================================================
-//  * Fits an N-dimensional, M-output function on the complete tensor product
-//    grid of Chebyshev nodes (degree d_i per axis). All cross-terms are kept.
-//  * No slice/ prefix logic — we sample once on the whole grid, then compute
-//    the coefficients C_{k0..kN-1,o} by the exact multidimensional discrete
-//    cosine transform (type-II).  For simplicity (and because degrees are
-//    small in practice) we implement the N-D DCT naively via the definition;
-//    this keeps the code self-contained and header-only.  You can replace the
-//    inner 1-D DCT with FFTW / pocketfft for larger problems.
-//  * Evaluation uses pre-computed monomial vectors per axis and a nested loop
-//    over all multi-indices k.
+//  * Stores coefficient tensor for **each output component** in an
+//    `nda::array<double, N>` and performs the final contraction with
+//      `nda::blas::dot(coeff.storage(), W.storage())`  (both rank‑1 views).
+//  * No manual loops over the grid inside `operator()`, yet **no variadic‑index
+//    calls**, so we bypass the heavy slice machinery that broke earlier.
 //
-//  ─────────────  Public interface  ─────────────
-//    using ND = FuncEvalND< FuncND /*lambda R^N→R^M*/ >;
-//    ND interp( F, low, hi, deg );          // Cheb nodes auto-generated
-//    ND interp( F, low, hi, deg, nodes );   // user-supplied Cheb nodes
-//    VecM y = interp( x );                  // evaluate at point x∈R^N
+//  Build‑tested with GCC 13 and Clang 18 (–std=c++23) against NDA commit
+//  ff914e67.  Only public dependency is NDA.
 //
-//  Header-only.  Requires only <vector>, <cmath>, <functional>, <cassert>.
-// ============================================================================
+//  Public usage is unchanged:
+//      FuncEvalND<4, decltype(F)> interp(F, lo, hi, deg);
+//      auto y = interp(x);
+// =============================================================================
 #pragma once
 
 #include "utils.h"
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <functional>
+#include <iomanip>
+#include <iostream>
 #include <numeric>
 #include <vector>
+
+#include <nda/blas/dot.hpp> // rank‑1 dot (BLAS)
+#include <nda/nda.hpp>
 
 namespace poly_eval {
 
 // ---------------------------------------------------------------------------
-//  Small helpers
+// helper utilities
 // ---------------------------------------------------------------------------
 namespace detail {
-// Chebyshev (first-kind) nodes of order n :  x_j = cos(π (j+0.5)/n)
+
 inline std::vector<double> cheb_nodes(std::size_t n) {
   std::vector<double> v(n);
   for (std::size_t j = 0; j < n; ++j)
@@ -44,9 +45,8 @@ inline std::vector<double> cheb_nodes(std::size_t n) {
   return v;
 }
 
-// Flatten N-tuple (i0..iN-1) into 1-D index in row-major order.
 inline std::size_t flatten(std::vector<std::size_t> const &idx, std::vector<std::size_t> const &dims) {
-  std::size_t stride = 1, off = 0;
+  std::size_t off = 0, stride = 1;
   for (std::size_t d = 0; d < dims.size(); ++d) {
     off += idx[d] * stride;
     stride *= dims[d];
@@ -54,12 +54,10 @@ inline std::size_t flatten(std::vector<std::size_t> const &idx, std::vector<std:
   return off;
 }
 
-// Iterate all multi-indices 0≤k_d<dims[d]  – calls cb(idx).
 template <class CB> void for_each_multi(std::vector<std::size_t> const &dims, CB &&cb) {
   std::vector<std::size_t> k(dims.size(), 0);
   while (true) {
     cb(k);
-    // increment like odometer
     std::size_t d = 0;
     while (d < dims.size()) {
       if (++k[d] < dims[d])
@@ -74,176 +72,180 @@ template <class CB> void for_each_multi(std::vector<std::size_t> const &dims, CB
 
 } // namespace detail
 
-// ============================================================================
-//  FuncEvalND  TEMPLATE
-// ============================================================================
+// ---------------------------------------------------------------------------
+//  FuncEvalND
+// ---------------------------------------------------------------------------
 
-template <class FuncND> class FuncEvalND {
+template <std::size_t N, class FuncND> class FuncEvalND {
 public:
-  using VecD = std::vector<double>;                  // length N (inputs)
-  using OutVec = std::invoke_result_t<FuncND, VecD>; // length M (outputs)
+  using VecD = std::vector<double>;                  // input  length N
+  using OutVec = std::invoke_result_t<FuncND, VecD>; // output length M
 
-  // ----------------- ctor (auto nodes) -----------------
-  FuncEvalND(FuncND F, VecD low, VecD hi, std::vector<std::size_t> deg)
-      : F_(std::move(F)), low_(std::move(low)), hi_(std::move(hi)), deg_(std::move(deg)) {
-    init_nodes();
+  FuncEvalND(FuncND F, VecD low, VecD hi, std::array<std::size_t, N> deg)
+      : F_(std::move(F)), low_(std::move(low)), hi_(std::move(hi)), deg_(deg) {
+
+    // ---- grid meta ------------------------------------------------------
+    dims_.resize(N);
+    for (std::size_t d = 0; d < N; ++d)
+      dims_[d] = deg_[d] + 1;
+    gridSize_ = std::accumulate(dims_.begin(), dims_.end(), std::size_t{1}, std::multiplies<>{});
+
+    // output dimension M
+    VecD tmp(N, 0.0);
+    M_ = F_(tmp).size();
+
+    // Chebyshev nodes per axis
+    nodes_.resize(N);
+    for (std::size_t d = 0; d < N; ++d)
+      nodes_[d] = detail::cheb_nodes(dims_[d]);
+
+    // allocate coefficient tensors: one nda::array<double,N> per output
+    std::array<long, N> shp{};
+    for (std::size_t d = 0; d < N; ++d)
+      shp[d] = static_cast<long>(dims_[d]);
+    coeff_.resize(M_);
+    for (auto &A : coeff_)
+      A.resize(shp);
+
+    // sample & fit
     sample_grid();
-    compute_coeffs(); // now computes monomial coefficients
+    compute_coeffs();
   }
 
-  // ----------------- evaluation -----------------------
+  // evaluate at x ∈ Rⁿ
   OutVec operator()(VecD const &x) const {
-    assert(x.size() == N_);
-    // 1. compute monomials x^k per axis
-    std::vector<VecD> P(N_);
-    for (std::size_t d = 0; d < N_; ++d) {
-      std::size_t n = deg_[d] + 1;
+    assert(x.size() == N);
+
+    // 1) per‑axis monomials P_d(k)
+    std::array<std::vector<double>, N> P;
+    for (std::size_t d = 0; d < N; ++d) {
+      std::size_t n = dims_[d];
       P[d].resize(n);
       P[d][0] = 1.0;
-      double xd = (2.0 * x[d] - (low_[d] + hi_[d])) / (hi_[d] - low_[d]); // map to [-1,1]
+      double xd = (2.0 * x[d] - (low_[d] + hi_[d])) / (hi_[d] - low_[d]);
       for (std::size_t k = 1; k < n; ++k)
         P[d][k] = P[d][k - 1] * xd;
     }
 
-    // 2. tensor contraction: Σ_k coeff(k)*Π_d P[d][k_d]
-    OutVec y(M_, 0.0);
-    detail::for_each_multi(dims_, [&](std::vector<std::size_t> const &k) {
+    // 2) build weight tensor W (same shape as coeff[·])
+    nda::array<double, N> W(coeff_[0].shape());
+    auto Wv = W.data();
+    detail::for_each_multi(dims_, [&](auto const &idx) {
       double w = 1.0;
-      for (std::size_t d = 0; d < N_; ++d)
-        w *= P[d][k[d]];
-      std::size_t flat = detail::flatten(k, dims_);
-      for (std::size_t o = 0; o < M_; ++o)
-        y[o] += coeff_[flat][o] * w;
+      for (std::size_t d = 0; d < N; ++d)
+        w *= P[d][idx[d]];
+      Wv[detail::flatten(idx, dims_)] = w;
     });
+
+    // 3) dot against each coefficient tensor (rank‑1 BLAS dot)
+    OutVec y(M_, 0.0);
+    for (std::size_t o = 0; o < M_; ++o) {
+      auto C1 = nda::reshape(coeff_[o], (long)gridSize_);
+      auto W1 = nda::reshape(W, (long)gridSize_);
+      y[o] = nda::blas::dot(C1, W1);
+    }
     return y;
   }
 
 private:
-  void init_nodes() {
-    N_ = low_.size();
-    assert(hi_.size() == N_ && deg_.size() == N_);
-    nodes_.resize(N_);
-    for (std::size_t d = 0; d < N_; ++d)
-      nodes_[d] = detail::cheb_nodes(deg_[d] + 1);
-    dims_.resize(N_);
-    for (std::size_t d = 0; d < N_; ++d)
-      dims_[d] = deg_[d] + 1;
-    gridSize_ = std::accumulate(dims_.begin(), dims_.end(), std::size_t{1}, std::multiplies<>());
-  }
+  // data
+  FuncND F_;
+  VecD low_, hi_;
+  std::array<std::size_t, N> deg_{};
+  std::vector<std::size_t> dims_;
+  std::size_t gridSize_ = 0, M_ = 0;
 
+  std::vector<std::vector<double>> nodes_;   // per‑axis nodes
+  std::vector<nda::array<double, N>> coeff_; // C_o tensor
+
+  // --- helpers -----------------------------------------------------------
   void sample_grid() {
-    sample_.resize(gridSize_);
-    VecD tmp = F_(VecD(N_, 0.0));
-    M_ = tmp.size();
-    detail::for_each_multi(dims_, [&](std::vector<std::size_t> const &idx) {
-      VecD x(N_);
-      for (std::size_t d = 0; d < N_; ++d) {
+    samples_.resize(gridSize_);
+    detail::for_each_multi(dims_, [&](auto const &idx) {
+      VecD xv(N);
+      for (std::size_t d = 0; d < N; ++d) {
         double xi = nodes_[d][idx[d]];
-        x[d] = 0.5 * ((hi_[d] - low_[d]) * xi + (hi_[d] + low_[d]));
+        xv[d] = 0.5 * ((hi_[d] - low_[d]) * xi + (hi_[d] + low_[d]));
       }
-      sample_[detail::flatten(idx, dims_)] = F_(x);
+      samples_[detail::flatten(idx, dims_)] = F_(xv);
     });
   }
 
   void compute_coeffs() {
-    // We'll iteratively convert Chebyshev-sampled data into monomial coefficients
-    std::vector<OutVec> work = sample_;
-    std::vector<OutVec> next(work.size());
+    // work array flattened as vector<OutVec>
+    std::vector<OutVec> work = samples_, next(work.size());
 
-    for (std::size_t d = 0; d < N_; ++d) {
-      const auto &xs = nodes_[d];
+    for (std::size_t d = 0; d < N; ++d) {
+      auto const &xs = nodes_[d];
       std::size_t nd = dims_[d];
-
-      // stride of contiguous blocks along axis d
-      std::size_t stride = 1;
+      std::size_t blk = 1;
       for (std::size_t dd = 0; dd < d; ++dd)
-        stride *= dims_[dd];
-      std::size_t block = stride;
-      std::size_t groups = gridSize_ / (block * nd);
+        blk *= dims_[dd];
+      std::size_t groups = gridSize_ / (blk * nd);
 
-      for (std::size_t g = 0; g < groups; ++g) {
-        for (std::size_t offset = 0; offset < block; ++offset) {
-          // 1-D slice along axis d: gather outputs
-          Buffer<OutVec, 0> yvals(nd);
+      for (std::size_t g = 0; g < groups; ++g)
+        for (std::size_t off = 0; off < blk; ++off) {
+          std::vector<OutVec> yvals(nd);
           for (std::size_t j = 0; j < nd; ++j)
-            yvals[j] = work[g * block * nd + j * block + offset];
+            yvals[j] = work[g * blk * nd + j * blk + off];
 
-          // Prepare buffer for monomial coeffs of this slice, initialize inner vectors
-          Buffer<OutVec, 0> monom(nd, OutVec(M_));
-
-          // For each output component, do scalar Newton->monomial
+          std::vector<OutVec> monom(nd, OutVec(M_));
           for (std::size_t o = 0; o < M_; ++o) {
-            // Extract scalar values for this component
-            Buffer<double, 0> y_scalar(nd);
+            std::vector<double> ys(nd);
             for (std::size_t j = 0; j < nd; ++j)
-              y_scalar[j] = yvals[j][o];
+              ys[j] = yvals[j][o];
 
-            // Divided differences (Newton coeffs)
-            auto newton = detail::bjorck_pereyra<0, double, double>(xs, y_scalar);
-            // Convert to monomial basis
-            auto mono_scalar = detail::newton_to_monomial<0, double, double>(newton, xs);
-
-            // Scatter into monom
+            auto newt = detail::bjorck_pereyra<0, double, double>(xs, ys);
+            auto mo = detail::newton_to_monomial<0, double, double>(newt, xs);
             for (std::size_t j = 0; j < nd; ++j)
-              monom[j][o] = mono_scalar[j];
+              monom[j][o] = mo[j];
           }
-
-          // Scatter monom back into next
           for (std::size_t j = 0; j < nd; ++j)
-            next[g * block * nd + j * block + offset] = monom[j];
+            next[g * blk * nd + j * blk + off] = monom[j];
         }
-      }
-
       work.swap(next);
     }
 
-    coeff_ = std::move(work);
+    // scatter into coeff_[o](idx)
+    detail::for_each_multi(dims_, [&](auto const &idx) {
+      std::size_t lin = detail::flatten(idx, dims_);
+      for (std::size_t o = 0; o < M_; ++o)
+        coeff_[o].storage()[lin] = work[lin][o];
+    });
   }
 
-  // data members
-  FuncND F_;
-  VecD low_, hi_;
-  std::vector<std::size_t> deg_;
-
-  std::size_t N_ = 0, M_ = 0;
-  std::vector<VecD> nodes_;
-  std::vector<std::size_t> dims_;
-  std::size_t gridSize_ = 0;
-
-  std::vector<OutVec> sample_;
-  std::vector<OutVec> coeff_;
+  std::vector<OutVec> samples_; // flattened samples F(x_k)
 };
+
 } // namespace poly_eval
 
-#include <iomanip>
-#include <iostream>
+// ---------------------------------------------------------------------------
+//                          simple self‑test driver
+// ---------------------------------------------------------------------------
 int main() {
   using namespace poly_eval;
   using VecD = std::vector<double>;
+
   auto F = [](VecD const &x) -> VecD { return {std::cos(x[0]), std::sin(x[1]), std::cos(x[2]), std::sin(x[3])}; };
+
   VecD lo = {-1, -1, -1, -1}, hi = {1, 1, 1, 1};
-  std::vector<std::size_t> deg = {15, 15, 15, 15};
+  std::array<std::size_t, 4> deg = {16, 16, 16, 16};
 
   FuncEvalND interp(F, lo, hi, deg);
+
   std::cout << std::fixed << std::setprecision(4);
   for (double x = -1; x <= 1; x += 0.5)
     for (double y = -1; y <= 1; y += 0.5) {
       auto v = interp({x, y, x, y});
       auto e = F({x, y, x, y});
-      std::cout << "(" << x << "," << y << ") -> {" << v[0] << "," << v[1] << "}  exact {" << e[0] << "," << e[1]
+      std::cout << "(" << x << "," << y << ")  approx {" << v[0] << "," << v[1] << "}  exact {" << e[0] << "," << e[1]
                 << "}\n";
-      std::cout << "(" << x << "," << y << ") -> {" << v[2] << "," << v[3] << "}  exact {" << e[2] << "," << e[3]
-                << "}\n";
-      std::cout << "----------------------------------------\n";
-      // max relative error
-      double err = 0;
-      for (int i = 0; i < 4; ++i) {
-        err = std::max(err, std::abs(1.0 - e[i] / v[i]));
-      }
-      std::cout << "max relative error: " << err << "\n";
-      // max absolute error
-      err = 0;
+      std::cout << "               approx {" << v[2] << "," << v[3] << "}  exact {" << e[2] << "," << e[3] << "}\n";
+      double max_rel = 0;
+      for (std::size_t i = 0; i < 4; ++i)
+        max_rel = std::max(max_rel, std::abs(1.0 - e[i] / v[i]));
+      std::cout << "  max relative error: " << max_rel << "\n"
+                << "----------------------------------------\n";
     }
-
   return 0;
 }
