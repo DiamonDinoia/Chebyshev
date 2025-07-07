@@ -168,66 +168,14 @@ C20CONSTEXPR void FuncEval<Func, N_compile_time, Iters_compile_time>::initialize
   }
 
   // 3) compute Newton → monomial
-  auto newton = bjorck_pereyra(grid, samples);
-  auto temp_monomial = newton_to_monomial(newton, grid);
+  auto newton = detail::bjorck_pereyra<N_compile_time, InputType, OutputType>(grid, samples);
+  auto temp_monomial = detail::newton_to_monomial<N_compile_time, InputType, OutputType>(newton, grid);
   assert(temp_monomial.size() == monomials.size() && "size mismatch!");
 
   std::copy(temp_monomial.begin(), temp_monomial.end(), monomials.begin());
 
   // 4) optional refine
   refine(grid, samples);
-}
-
-template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-C20CONSTEXPR auto
-FuncEval<Func, N_compile_time, Iters_compile_time>::bjorck_pereyra(const Buffer<InputType, N_compile_time> &x,
-                                                                   const Buffer<OutputType, N_compile_time> &y)
-    -> Buffer<OutputType, N_compile_time> {
-  const std::size_t n = (N_compile_time == 0 ? x.size() : N_compile_time);
-  // copy into working buffer
-  Buffer<OutputType, N_compile_time> a = y;
-
-  // divided‐difference
-  for (std::size_t k = 0; k + 1 < n; ++k) {
-    for (std::size_t i = n - 1; i >= k + 1; --i) {
-      a[i] = (a[i] - a[i - 1]) / static_cast<OutputType>(x[i] - x[i - k - 1]);
-    }
-  }
-  return a;
-}
-
-template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
-C20CONSTEXPR auto
-FuncEval<Func, N_compile_time, Iters_compile_time>::newton_to_monomial(const Buffer<OutputType, N_compile_time> &alpha,
-                                                                       const Buffer<InputType, N_compile_time> &nodes)
-    -> Buffer<OutputType, N_compile_time> {
-  // temporarily do pushes in a vector, then copy back
-  int n = static_cast<int>(alpha.size());
-  // Build coefficient buffer using Buffer instead of std::vector
-  Buffer<OutputType, N_compile_time * 2> c{0}; // zero-initialized for static size
-  if constexpr (N_compile_time == 0) {
-    c.reserve(n);
-    c.push_back(static_cast<OutputType>(0.0)); // start with constant term = 0
-  }
-  std::size_t deg = 0;
-  for (int i = n - 1; i >= 0; --i) {
-    ++deg;
-    if constexpr (N_compile_time == 0) {
-      c.push_back(static_cast<OutputType>(0.0)); // extend for dynamic
-    }
-    for (int j = static_cast<int>(deg); j >= 1; --j) {
-      c[j] = c[j - 1] - static_cast<OutputType>(nodes[i]) * c[j];
-    }
-    c[0] = -static_cast<OutputType>(nodes[i]) * c[0] + alpha[i];
-  }
-  if constexpr (N_compile_time == 0) {
-    if (static_cast<int>(c.size()) > n)
-      c.resize(n);
-    return c;
-  }
-  Buffer<OutputType, N_compile_time> result{}; // zero-initialized for static size
-  std::copy(c.begin(), c.begin() + N_compile_time, result.begin());
-  return result;
 }
 
 template <class Func, std::size_t N_compile_time, std::size_t Iters_compile_time>
@@ -249,8 +197,8 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::refine(const Buffer<InputTyp
     }
     std::reverse(monomials.begin(), monomials.end());
     // correction
-    auto newton_r = bjorck_pereyra(x_cheb_, r_cheb);
-    auto mono_r = newton_to_monomial(newton_r, x_cheb_);
+    auto newton_r = detail::bjorck_pereyra<N_compile_time, InputType, OutputType>(x_cheb_, r_cheb);
+    auto mono_r = detail::newton_to_monomial<N_compile_time, InputType, OutputType>(newton_r, x_cheb_);
     assert(mono_r.size() == monomials.size());
 
     for (std::size_t j = 0; j < monomials.size(); ++j) {

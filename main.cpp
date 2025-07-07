@@ -1,12 +1,12 @@
-#include <iostream>
-#include <random>
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <iostream>
+#include <numeric>
+#include <random>
+#include <tuple> // For std::tuple and std::tuple_cat
 #include <utility>
 #include <vector>
-#include <array>
-#include <numeric>
-#include <algorithm>
-#include <tuple>    // For std::tuple and std::tuple_cat
 
 // Include necessary nda headers
 #include <nda/nda.hpp>
@@ -17,24 +17,22 @@ constexpr double pi = 3.14159265358979323846;
 // ChebFunND: N dims → M outputs, all in nda::array
 // Approximates a function f: R^N -> R^M using a multidimensional Chebyshev series.
 //==============================================================================
-template <typename T, size_t N, size_t M, typename F, int... Degrees>
-class ChebFunND {
+template <typename T, size_t N, size_t M, typename F, int... Degrees> class ChebFunND {
   static_assert(sizeof...(Degrees) == N, "Degree pack must match dimensionality");
 
   using coeffs_t = nda::array<T, N + 1>; // Coefficients tensor C[k_0, ..., k_{N-1}, o]
-  using vecN_t = nda::array<T, 1>; // N-dim points x
-  using vecM_t = nda::array<T, 1>; // M-dim outputs f(x)
+  using vecN_t = nda::array<T, 1>;       // N-dim points x
+  using vecM_t = nda::array<T, 1>;       // M-dim outputs f(x)
 
   coeffs_t coeffs_;
-  vecN_t a_, b_; // Lower and upper bounds of the N-dimensional box
+  vecN_t a_, b_;              // Lower and upper bounds of the N-dimensional box
   std::array<long, N> shape_; // Shape of the coefficient tensor in the first N dimensions (Degrees + 1)
 
 public:
   // Constructor: Computes the Chebyshev coefficients of the function f.
   // The function f is sampled at the Chebyshev nodes, and a multidimensional
   // Discrete Cosine Transform (DCT) is performed to find the coefficients.
-  ChebFunND(vecN_t a, vecN_t b, F f)
-    : a_(std::move(a)), b_(std::move(b)) {
+  ChebFunND(vecN_t a, vecN_t b, F f) : a_(std::move(a)), b_(std::move(b)) {
 
     // Determine the shape of the coefficients tensor: (Degree_0+1, ..., Degree_{N-1}+1, M)
     std::array<long, N + 1> coeffs_shape_array = {static_cast<long>(Degrees + 1)..., static_cast<long>(M)};
@@ -82,9 +80,8 @@ public:
           for (long j = 0; j < m; ++j) {
             std::array<long, N + 1> element_idx = line_start_idx;
             element_idx[axis] = j;
-            line_data[j] = std::apply([&](auto &&... args) {
-              return coeffs_(std::forward<decltype(args)>(args)...);
-            }, element_idx);
+            line_data[j] =
+                std::apply([&](auto &&...args) { return coeffs_(std::forward<decltype(args)>(args)...); }, element_idx);
           }
 
           // Perform 1D DCT (Type 2) on the line_data manually.
@@ -94,7 +91,7 @@ public:
           for (long k = 0; k < m; ++k) {
             T sum{};
             for (long j = 0; j < m; ++j) {
-              sum += line_data[j] * std::cos(pi * k * (j + T(0.5)) / m);
+              sum += line_data[j] * std::cos(pi * T(k) * (j + T(0.5)) / m);
             }
             dct_data[k] = sum * (T(2) / m);
           }
@@ -104,9 +101,8 @@ public:
           for (long k = 0; k < m; ++k) {
             std::array<long, N + 1> element_idx = line_start_idx;
             element_idx[axis] = k;
-            std::apply([&](auto &&... args) {
-              coeffs_(std::forward<decltype(args)>(args)...) = dct_data[k];
-            }, element_idx);
+            std::apply([&](auto &&...args) { coeffs_(std::forward<decltype(args)>(args)...) = dct_data[k]; },
+                       element_idx);
           }
 
           // Increment loop_indices to move to the next slice.
@@ -140,8 +136,7 @@ public:
     // xt_d = (2 * x_d - (a_d + b_d)) / (b_d - a_d)
     vecN_t xt(N);
     for (long i = 0; i < N; ++i) {
-      xt(i) = (T(2) * x(i) - a_(i) - b_(i))
-              / (b_(i) - a_(i));
+      xt(i) = (T(2) * x(i) - a_(i) - b_(i)) / (b_(i) - a_(i));
     }
 
     // Evaluate Chebyshev polynomials T_k(xt) for each dimension and each degree up to the maximum degree.
@@ -153,12 +148,11 @@ public:
       if (shape_[d] > 1)
         Tvals(d, 1) = xt(d);
       for (long k = 2; k < shape_[d]; ++k)
-        Tvals(d, k) = T(2) * xt(d) * Tvals(d, k - 1) - Tvals(
-                          d, k - 2);
+        Tvals(d, k) = T(2) * xt(d) * Tvals(d, k - 1) - Tvals(d, k - 2);
     }
 
     vecM_t result(M); // Result vector for the M outputs
-    result = T(0); // Initialize result to zero
+    result = T(0);    // Initialize result to zero
 
     // Evaluate the interpolated function by summing over all coefficient indices.
     // This loop iterates through all combinations of indices (k_0, ..., k_{N-1}).
@@ -180,15 +174,15 @@ public:
         current_prod *= Tvals(d, coeff_idx[d]);
       }
 
-      // Add the term C[k_0, ..., k_{N-1}, o] * prod_{d=0}^{N-1} T_{k_d}(x_d) to the result for each output component 'o'.
+      // Add the term C[k_0, ..., k_{N-1}, o] * prod_{d=0}^{N-1} T_{k_d}(x_d) to the result for each output component
+      // 'o'.
       for (long o = 0; o < M; ++o) {
         for (long d = 0; d < N; ++d)
           full_coeff_idx[d] = coeff_idx[d];
         full_coeff_idx[N] = o;
 
-        auto coeff_value = std::apply([&](auto &&... args) {
-          return coeffs_(std::forward<decltype(args)>(args)...);
-        }, full_coeff_idx);
+        auto coeff_value =
+            std::apply([&](auto &&...args) { return coeffs_(std::forward<decltype(args)>(args)...); }, full_coeff_idx);
 
         result(o) += coeff_value * current_prod;
       }
@@ -216,8 +210,7 @@ public:
 private:
   // Recursive helper function to sample the function f at the N-dimensional Chebyshev nodes.
   // The nodes are determined by the indices (j_0, ..., j_{N-1}) where j_d ranges from 0 to Degree_d.
-  template <size_t D_idx>
-  void sample(F &f, std::array<long, N> &idx) {
+  template <size_t D_idx> void sample(F &f, std::array<long, N> &idx) {
     for (long i = 0; i < shape_[D_idx]; ++i) {
       idx[D_idx] = i;
       if constexpr (D_idx + 1 < N) {
@@ -229,8 +222,7 @@ private:
           // Calculate the Chebyshev node in [-1, 1] for dimension d.
           T theta = pi * (idx[d] + T(0.5)) / shape_[d];
           // Map the node from [-1, 1] to the interval [a_d, b_d].
-          pt(d) = T(0.5) * (a_(d) + b_(d)) + T(0.5) * (
-                    b_(d) - a_(d)) * std::cos(theta);
+          pt(d) = T(0.5) * (a_(d) + b_(d)) + T(0.5) * (b_(d) - a_(d)) * std::cos(theta);
         }
         auto out = f(pt); // Sample the function at the point.
         // Store the sampled values in the coefficients tensor at the corresponding index (j_0, ..., j_{N-1}, o).
@@ -240,9 +232,7 @@ private:
             full[d] = idx[d];
           full[N] = o;
 
-          std::apply([&](auto &&... args) {
-            coeffs_(std::forward<decltype(args)>(args)...) = out(o);
-          }, full);
+          std::apply([&](auto &&...args) { coeffs_(std::forward<decltype(args)>(args)...) = out(o); }, full);
         }
       }
     }
@@ -253,9 +243,7 @@ private:
 // Test harness
 //==============================================================================
 template <size_t D, size_t M, typename F>
-void test_interp(const nda::array<double, 1> &a,
-                 const nda::array<double, 1> &b,
-                 F fcn) {
+void test_interp(const nda::array<double, 1> &a, const nda::array<double, 1> &b, F fcn) {
   auto run_test = [&](auto &cheb) {
     std::mt19937_64 rng(std::random_device{}());
     std::uniform_real_distribution<double> dist(0, 1);
@@ -271,7 +259,7 @@ void test_interp(const nda::array<double, 1> &a,
         pt(d) = a(d) + t * (b(d) - a(d));
       }
       auto approx = cheb(pt); // Interpolated value
-      auto exact = fcn(pt); // Exact function value
+      auto exact = fcn(pt);   // Exact function value
 
       for (long k = 0; k < M; ++k) {
         double e = exact(k), p = approx(k);
@@ -305,8 +293,7 @@ void test_interp(const nda::array<double, 1> &a,
 }
 
 // Helper to run tests for different dimensions and output sizes
-template <size_t D, size_t M>
-void test_dim_out() {
+template <size_t D, size_t M> void test_dim_out() {
   nda::array<double, 1> a(D), b(D); // Interval [a, b]
   for (long i = 0; i < D; ++i) {
     a(i) = -1.0;

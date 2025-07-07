@@ -71,12 +71,12 @@ target_include_directories(chebyshev_1d PRIVATE cheb)
 target_link_libraries(chebyshev_1d PRIVATE nanobench::nanobench xsimd)
 target_compile_options(chebyshev_1d PRIVATE $<$<CONFIG:Debug>:-fsanitize=address;-fno-omit-frame-pointer>)
 target_link_options(chebyshev_1d PRIVATE $<$<CONFIG:Debug>:-fsanitize=address>)
+
 add_executable(bench1d_1d bench1d.cpp)
 target_compile_features(bench1d_1d PRIVATE cxx_std_20)
 target_include_directories(bench1d_1d PRIVATE cheb)
 target_link_libraries(bench1d_1d PRIVATE nanobench::nanobench xsimd)
 target_compile_options(bench1d_1d PRIVATE -march=native)
-
 
 add_executable(bench_many bench_many.cpp)
 target_compile_features(bench_many PRIVATE cxx_std_17)
@@ -96,6 +96,12 @@ target_include_directories(bench_many_funcs PRIVATE cheb)
 target_link_libraries(bench_many_funcs PRIVATE nanobench::nanobench std::mdspan xsimd)
 target_compile_options(bench_many_funcs PRIVATE -march=native)
 
+add_executable(bench_many_funcs_pts bench_many_funcs_pts.cpp)
+target_compile_features(bench_many_funcs_pts PRIVATE cxx_std_20)
+target_include_directories(bench_many_funcs_pts PRIVATE cheb)
+target_link_libraries(bench_many_funcs_pts PRIVATE nanobench::nanobench std::mdspan xsimd)
+target_compile_options(bench_many_funcs_pts PRIVATE -march=native)
+
 add_executable(chebgrid_1d cheb_grid_1d.cpp)
 target_compile_features(chebgrid_1d PRIVATE cxx_std_20)
 
@@ -105,8 +111,13 @@ add_executable(bench_estrin bench_estrin.cpp)
 target_compile_features(bench_estrin PRIVATE cxx_std_20)
 target_compile_options(bench_estrin PRIVATE -march=native)
 
-
 add_executable(poly_eval poly_eval.cpp)
 target_compile_features(poly_eval PRIVATE cxx_std_20)
 target_compile_options(poly_eval PRIVATE -march=native)
 target_link_libraries(poly_eval PRIVATE cheb)
+
+
+add_executable(funcND funcND.cpp)
+target_compile_features(funcND PRIVATE cxx_std_20)
+target_compile_options(funcND PRIVATE -march=native)
+target_link_libraries(funcND PRIVATE cheb)

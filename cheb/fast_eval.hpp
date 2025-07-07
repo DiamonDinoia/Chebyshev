@@ -17,17 +17,6 @@ template <typename T> struct function_traits;
 template <typename T, typename> struct is_tuple_like;
 
 // -----------------------------------------------------------------------------
-// Buffer: Conditional type alias for std::vector or std::array
-// -----------------------------------------------------------------------------
-template <typename T, std::size_t N_compile_time_val>
-using Buffer = std::conditional_t<N_compile_time_val == 0, std::vector<T>, std::array<T, N_compile_time_val>>;
-
-template <typename T, std::size_t N_compile_time_val, std::size_t alignment>
-using AlignedBuffer =
-    std::conditional_t<N_compile_time_val == 0, std::vector<T, xsimd::aligned_allocator<T, alignment>>,
-                       std::array<T, N_compile_time_val>>;
-
-// -----------------------------------------------------------------------------
 // Forward declarations for FuncEvalMany
 template <typename... EvalTypes> class FuncEvalMany;
 // Forward declaration for FuncEval
@@ -71,12 +60,6 @@ private:
   template <int OuterUnrollFactor, bool pts_aligned, bool out_aligned>
   constexpr void horner_polyeval(const InputType *pts, OutputType *out, std::size_t num_points) const noexcept;
 
-  C20CONSTEXPR static Buffer<OutputType, N_compile_time> bjorck_pereyra(const Buffer<InputType, N_compile_time> &x,
-                                                                        const Buffer<OutputType, N_compile_time> &y);
-
-  C20CONSTEXPR static Buffer<OutputType, N_compile_time>
-  newton_to_monomial(const Buffer<OutputType, N_compile_time> &alpha, const Buffer<InputType, N_compile_time> &nodes);
-
   C20CONSTEXPR void refine(const Buffer<InputType, N_compile_time> &x_cheb_,
                            const Buffer<OutputType, N_compile_time> &y_cheb_);
 
@@ -98,8 +81,8 @@ template <typename... EvalTypes> class FuncEvalMany {
   static constexpr std::size_t kF = sizeof...(EvalTypes);
 
   // SIMD width we target (4 doubles for AVX2)
-  static constexpr std::size_t kSimd = kF == 1 ? 1 : detail::best_simd<InputType>(kF);
-  static constexpr std::size_t kF_pad = (kF + kSimd - 1) & (-kSimd);
+  static constexpr std::size_t kSimd = 1;
+  static constexpr std::size_t kF_pad = kF;
   static constexpr std::size_t vector_width = kSimd > 1 ? kSimd : 0; // 1 if no SIMD, otherwise kSimd
 
   static_assert(kSimd == 1 || !std::is_void_v<xsimd::make_sized_batch_t<InputType, kSimd>>,
@@ -125,8 +108,8 @@ template <typename... EvalTypes> class FuncEvalMany {
 public:
   // ------------------------------------------------------------------ ctor
   explicit FuncEvalMany(const EvalTypes &...evals) {
-    std::cout << "FuncEvalMany: kF = " << kF << ", kF_pad = " << kF_pad
-              << ", vector_width = " << vector_width << ", deg_max_ctime_ = " << deg_max_ctime_ << '\n';
+    // std::cout << "FuncEvalMany: kF = " << kF << ", kF_pad = " << kF_pad << ", vector_width = " << vector_width
+    // << ", deg_max_ctime_ = " << deg_max_ctime_ << '\n';
     // copy real low/hi … then identity for padding lanes
     auto tmp_low = std::array<InputType, kF>{evals.low...};
     auto tmp_hi = std::array<InputType, kF>{evals.hi...};
@@ -152,18 +135,21 @@ public:
   [[nodiscard]] std::size_t degree() const noexcept { return deg_max_; }
 
   // ---------------------------------------------------------------- broadcast
-  [[nodiscard]] std::array<OutputType, kF> operator()(InputType x) const noexcept {
+  std::array<OutputType, kF> operator()(InputType x) const noexcept {
     std::array<InputType, kF_pad> xu{};
     for (std::size_t i = 0; i < kF; ++i)
       xu[i] = xsimd::fms(InputType(2.0), x, hi_[i]) * low_[i];
     std::array<OutputType, kF_pad> res{};
     horner_transposed<kF_pad, deg_max_ctime_, vector_width>(xu.data(), coeffs_.data_handle(), res.data(), kF_pad,
                                                             deg_max_);
+    if constexpr (kF == kF_pad) {
+      return res; // no padding, return as is
+    }
     return extract_real(res);
   }
 
   // ------------------------------------------------ per-poly input array
-  [[nodiscard]] std::array<OutputType, kF> operator()(const std::array<InputType, kF> &xs) const noexcept {
+  std::array<OutputType, kF> operator()(const std::array<InputType, kF> &xs) const noexcept {
     std::array<InputType, kF_pad> xu{};
     for (std::size_t i = 0; i < kF; ++i)
       xu[i] = xsimd::fms(InputType(2.0), xs[i], hi_[i]) * low_[i];
@@ -173,16 +159,31 @@ public:
     return extract_real(res);
   }
 
+  void operator()(const InputType *x, OutputType *out, std::size_t num_points) const noexcept {
+    // M = kF is compile-time constant
+    constexpr std::size_t M = kF;
+    // define extents: [num_points][M], where M is static
+    using extents_t =
+        std::experimental::mdspan<OutputType, std::experimental::extents<std::size_t, std::dynamic_extent, M>,
+                                  std::experimental::layout_right>;
+
+    // bind out[] to a 2D view with shape (num_points, M)
+    extents_t out_m{out, num_points};
+
+    // now out_m(i,j) == out[i*M + j]
+    for (std::size_t i = 0; i < num_points; ++i) {
+      auto vals = operator()(x[i]); // scalar operator returns std::array<OutputType,M>
+      detail::unroll_loop<M>([&]<const size_t j> { out_m(i, j) = vals[j]; });
+    }
+  }
   // ---------------------------------------------- variadic convenience
-  template <typename... Ts>
-  [[nodiscard]] std::array<OutputType, kF> operator()(InputType first, Ts... rest) const noexcept {
+  template <typename... Ts> std::array<OutputType, kF> operator()(InputType first, Ts... rest) const noexcept {
     static_assert(sizeof...(Ts) + 1 == kF, "Incorrect number of arguments");
     return operator()(std::array<InputType, kF>{first, static_cast<InputType>(rest)...});
   }
 
   // ------------------------------------------------ tuple of inputs
-  template <typename... Ts>
-  [[nodiscard]] std::array<OutputType, kF> operator()(const std::tuple<Ts...> &tup) const noexcept {
+  template <typename... Ts> std::array<OutputType, kF> operator()(const std::tuple<Ts...> &tup) const noexcept {
     static_assert(sizeof...(Ts) == kF, "Tuple size must equal number of polynomials");
     std::array<InputType, kF> xs{};
     std::apply([&](auto &&...e) { xs = {static_cast<InputType>(e)...}; }, tup);
@@ -208,7 +209,10 @@ private:
   }
 
   // --------------- slice the first kF results -----------------------
-  [[nodiscard]] std::array<OutputType, kF> extract_real(const std::array<OutputType, kF_pad> &full) const noexcept {
+  std::array<OutputType, kF> extract_real(const std::array<OutputType, kF_pad> &full) const noexcept {
+    if constexpr (kF == kF_pad) {
+      return full; // no padding, return as is
+    }
     std::array<OutputType, kF> out{};
     for (std::size_t i = 0; i < kF; ++i)
       out[i] = full[i];
@@ -235,8 +239,8 @@ C20CONSTEXPR auto make_func_eval(Func F, double eps, typename function_traits<Fu
 
 #if __cplusplus >= 202002L
 // 4) C++20: compile-time error tolerance
-template <double eps_val, std::size_t MaxN_val, std::size_t NumEvalPoints_val, std::size_t Iters_compile_time = 1,
-          class Func>
+template <double eps_val, std::size_t MaxN_val = 32, std::size_t NumEvalPoints_val = 100,
+          std::size_t Iters_compile_time = 1, class Func>
 constexpr auto make_func_eval(Func F, typename function_traits<Func>::arg0_type a,
                               typename function_traits<Func>::arg0_type b);
 #endif

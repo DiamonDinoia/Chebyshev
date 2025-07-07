@@ -21,3 +21,7 @@ target_link_libraries(es_kernel PRIVATE cheb)
 add_executable(many_funcs many_func_example.cpp)
 target_compile_features(many_funcs PRIVATE cxx_std_20)
 target_link_libraries(many_funcs PRIVATE cheb)
+
+add_executable(many_funcs_pts many_func_many_pts_example.cpp)
+target_compile_features(many_funcs_pts PRIVATE cxx_std_20)
+target_link_libraries(many_funcs_pts PRIVATE cheb)

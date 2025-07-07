@@ -21,6 +21,18 @@ constexpr bool is_constant_evaluated() noexcept {
 #endif
 
 namespace poly_eval {
+
+// -----------------------------------------------------------------------------
+// Buffer: Conditional type alias for std::vector or std::array
+// -----------------------------------------------------------------------------
+template <typename T, std::size_t N_compile_time_val>
+using Buffer = std::conditional_t<N_compile_time_val == 0, std::vector<T>, std::array<T, N_compile_time_val>>;
+
+template <typename T, std::size_t N_compile_time_val, std::size_t alignment>
+using AlignedBuffer =
+    std::conditional_t<N_compile_time_val == 0, std::vector<T, xsimd::aligned_allocator<T, alignment>>,
+                       std::array<T, N_compile_time_val>>;
+
 // -----------------------------------------------------------------------------
 // function_traits: Helper to deduce input and output types from a callable
 // -----------------------------------------------------------------------------
@@ -168,8 +180,7 @@ template <class T, uint8_t N = 1> constexpr uint8_t min_simd_width() {
   }
 };
 
-template <typename T>
-constexpr uint8_t best_simd(std::size_t N) {
+template <typename T> constexpr uint8_t best_simd(std::size_t N) {
   // make sure there's at least a 2-lane SIMD on this arch:
   constexpr uint8_t max_w = xsimd::batch<T, xsimd::best_arch>::size;
   static_assert(max_w >= 2, "Need at least 2-wide SIMD for this T/arch");
@@ -177,13 +188,12 @@ constexpr uint8_t best_simd(std::size_t N) {
   // start at the smallest vector width (at least 2)
   uint8_t chosen = std::max<uint8_t>(min_simd_width<T>(), 2);
 
-  // **NO** early break on w > N any more
   for (uint8_t w = chosen; w <= max_w; w <<= 1) {
-    std::size_t groups  = (N + w - 1) / w;
+    std::size_t groups = (N + w - 1) / w;
     std::size_t padding = groups * w - N;
     // accept any w that wastes ≤ w/2 lanes
-    if (padding <= w/2) {
-      chosen = w;  // keep bumping up to the largest “good enough” width
+    if (padding <= w / 2) {
+      chosen = w; // keep bumping up to the largest “good enough” width
     }
   }
   return chosen;
@@ -267,6 +277,48 @@ constexpr double cos(const double x) noexcept {
   default:
     return sin_poly(y);
   }
+}
+
+// stand-alone Bjorck–Pereyra divided‐difference
+template <std::size_t N, class X, class Y>
+C20CONSTEXPR Buffer<Y, N> bjorck_pereyra(const Buffer<X, N> &x, const Buffer<Y, N> &y) {
+  const std::size_t n = (N == 0 ? x.size() : N);
+  Buffer<Y, N> a = y;
+  for (std::size_t k = 0; k + 1 < n; ++k) {
+    for (std::size_t i = n - 1; i >= k + 1; --i) {
+      a[i] = (a[i] - a[i - 1]) / static_cast<Y>(x[i] - x[i - k - 1]);
+    }
+  }
+  return a;
+}
+
+// stand-alone Newton→monomial conversion
+template <std::size_t N, class X, class Y>
+C20CONSTEXPR Buffer<Y, N> newton_to_monomial(const Buffer<Y, N> &alpha, const Buffer<X, N> &nodes) {
+  int n = static_cast<int>(alpha.size());
+  Buffer<Y, N * 2> c{0};
+  if constexpr (N == 0) {
+    c.reserve(n);
+    c.push_back(Y(0));
+  }
+  std::size_t deg = 0;
+  for (int i = n - 1; i >= 0; --i) {
+    ++deg;
+    if constexpr (N == 0)
+      c.push_back(Y(0));
+    for (int j = static_cast<int>(deg); j >= 1; --j) {
+      c[j] = c[j - 1] - nodes[i] * c[j];
+    }
+    c[0] = -nodes[i] * c[0] + alpha[i];
+  }
+  if constexpr (N == 0) {
+    if (static_cast<int>(c.size()) > n)
+      c.resize(n);
+    return c;
+  }
+  Buffer<Y, N> result{};
+  std::copy_n(c.begin(), N, result.begin());
+  return result;
 }
 
 } // namespace poly_eval::detail

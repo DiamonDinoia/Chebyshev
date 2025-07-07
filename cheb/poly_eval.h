@@ -190,8 +190,6 @@ ALWAYS_INLINE constexpr void horner_transposed(const In *x,       // [M] scaled 
     // compile‑time guard
     static_assert(!has_Mt || (M_total % simd_width == 0), "M_total must be a multiple of simd_width when simd_width>0");
 
-
-
     //------------------------------------------------------------------
     // 1. Allocate per‑chunk accumulators and (optionally) cached x
     //------------------------------------------------------------------
@@ -305,4 +303,5 @@ ALWAYS_INLINE constexpr void horner_transposed(const In *x,       // [M] scaled 
     }
   }
 }
+
 } // namespace poly_eval
