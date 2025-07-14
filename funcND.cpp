@@ -1,185 +1,199 @@
+//------------------------------------------------------------------------------
+// Tensor-product Björck–Pereyra (any dimension) with nested Horner evaluation
+// Benchmark: analytic function vs. polynomial interpolation timing
+//------------------------------------------------------------------------------
 #include <Eigen/Dense>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <random>
 #include <type_traits>
 #include <vector>
 
-// Bring in function_traits and Buffer from poly_eval
 #include "fast_eval.hpp"
-
-#include <chrono>
 using namespace poly_eval;
 
-// FuncEvalND: fits a vector-valued multivariate polynomial via least squares
-// Template parameters:
-//  Func               - callable InputType -> OutputType
-//  N_compile_time     - compile-time degree (0 => dynamic)
-//  Iters_compile_time - number of refinement passes (optional)
+/*====================== 1‑D Björck–Pereyra ===============================*/
+static void bp_solve(const std::vector<long double> &x, const std::vector<long double> &y,
+                     std::vector<long double> &c) {
+  int n = static_cast<int>(x.size());
+  c = y;
+  for (int k = 0; k < n - 1; ++k)
+    for (int i = n - 1; i > k; --i)
+      c[i] = (c[i] - c[i - 1]) / (x[i] - x[i - k - 1]);
+}
 
-template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_time = 1> class FuncEvalND {
-public:
+/*===================== Nested Horner recursion ===========================*/
+// Generic case
+
+template <std::size_t Dim> struct HornerEval {
+  static long double eval(const long double *c, const long double *x, const long double *nodes, int n) {
+    std::size_t inner = 1;
+    for (std::size_t i = 1; i < Dim; ++i)
+      inner *= n;
+    long double acc = HornerEval<Dim - 1>::eval(c + (n - 1) * inner, x + 1, nodes, n);
+    for (int k = n - 2; k >= 0; --k) {
+      long double innerVal = HornerEval<Dim - 1>::eval(c + k * inner, x + 1, nodes, n);
+      acc = acc * (x[0] - nodes[k]) + innerVal;
+    }
+    return acc;
+  }
+};
+// Base
+template <> struct HornerEval<1> {
+  static long double eval(const long double *c, const long double *x, const long double *nodes, int n) {
+    long double acc = c[n - 1];
+    for (int k = n - 2; k >= 0; --k)
+      acc = acc * (x[0] - nodes[k]) + c[k];
+    return acc;
+  }
+};
+
+/*======================== FuncEvalND class ===============================*/
+
+template <class Func> class FuncEvalND {
   using InputArg0 = typename function_traits<Func>::arg0_type;
   using InputType = std::remove_cvref_t<InputArg0>;
   using OutputType = typename function_traits<Func>::result_type;
 
-  static constexpr std::size_t kDegreeCompileTime = N_compile_time;
-  static constexpr std::size_t kItersCompileTime = Iters_compile_time;
-
-  // dynamic-degree constructor
-  template <std::size_t Cur = N_compile_time, typename = std::enable_if_t<Cur == 0>>
-  FuncEvalND(Func f, int n, const InputType &a, const InputType &b) : func_(f), degree_(n), low_(a), hi_(b) {
-    initialize(n, a, b);
-  }
-
-  // evaluate at a single point
-  OutputType operator()(const InputType &pt) const { return evaluate_poly(pt); }
+public:
+  static constexpr std::size_t dim_ = std::tuple_size_v<InputType>;
+  static constexpr std::size_t outDim_ = std::tuple_size_v<OutputType>;
+  FuncEvalND(Func f, int n, const InputType &a, const InputType &b) : func_(f), n_(n), low_(a), hi_(b) { build(); }
+  OutputType operator()(const InputType &pt) const { return eval(pt); }
 
 private:
   Func func_;
-  int degree_;
-  static constexpr std::size_t dim_ = std::tuple_size_v<InputType>;
-  static constexpr std::size_t outDim_ = std::tuple_size_v<OutputType>;
+  int n_;
   InputType low_, hi_;
-  Buffer<OutputType, N_compile_time> coeffs_;
-
-  // build sample matrix and solve for vector coefficients
-  void initialize(int n, const InputType &a, const InputType &b) {
-    const int samples = 2 * n;
-    int total = 1;
-    for (std::size_t i = 0; i < dim_; ++i)
-      total *= samples;
-    int terms = 1;
-    for (std::size_t i = 0; i < dim_; ++i)
-      terms *= n;
-
-    Eigen::MatrixXd V(total, terms);
-    Eigen::MatrixXd Y(total, outDim_);
-
-    // Chebyshev nodes
-    std::vector<double> nodes(samples);
-    for (int i = 0; i < samples; ++i)
-      nodes[i] = std::cos(M_PI * (i + 0.5) / samples);
-
-    // fill V and Y
-    for (int idx = 0; idx < total; ++idx) {
-      int tmp = idx;
+  std::vector<long double> nodes_;  // n_
+  std::vector<long double> coeffs_; // outDim_ * n_^dim_
+  static std::size_t ipow(std::size_t b, std::size_t e) {
+    std::size_t r = 1;
+    while (e--)
+      r *= b;
+    return r;
+  }
+  void build() {
+    const std::size_t total = ipow(n_, dim_);
+    nodes_.resize(n_);
+    for (int i = 0; i < n_; ++i)
+      nodes_[i] = std::cos(M_PI * (i + 0.5L) / n_);
+    // sample
+    Eigen::Matrix<long double, Eigen::Dynamic, Eigen::Dynamic> Y(total, outDim_);
+    for (std::size_t idx = 0; idx < total; ++idx) {
+      std::size_t tmp = idx;
       InputType x;
       for (std::size_t d = 0; d < dim_; ++d) {
-        int id = tmp % samples;
-        tmp /= samples;
-        double t = nodes[id];
-        x[d] = 0.5 * (a[d] + b[d]) + 0.5 * (b[d] - a[d]) * t;
+        int id = tmp % n_;
+        tmp /= n_;
+        long double t = nodes_[id];
+        x[d] = static_cast<double>(0.5L * (low_[d] + hi_[d]) + 0.5L * (hi_[d] - low_[d]) * t);
       }
-      auto fx = func_(x); // OutputType vector
+      auto fx = func_(x);
       for (std::size_t d = 0; d < outDim_; ++d)
-        Y(idx, d) = fx[d];
-
-      for (int mon = 0; mon < terms; ++mon) {
-        int code = mon;
-        double pval = 1.0;
-        for (std::size_t d = 0; d < dim_; ++d) {
-          int p = code % n;
-          code /= n;
-          pval *= std::pow(x[d], p);
-        }
-        V(idx, mon) = pval;
-      }
+        Y(idx, d) = static_cast<long double>(fx[d]);
     }
-
-    // solve V * C = Y in least squares sense
-    const auto A = V.transpose() * V; // n×n
-    const auto B = V.transpose() * Y; // n×p
-    // 2) factor & solve
-    Eigen::LDLT<Eigen::MatrixXd> ldlt(A); //
-    Eigen::MatrixXd C = ldlt.solve(B);    // n×p result
-    coeffs_.clear();
-    coeffs_.resize(terms);
-
-    // store term-wise coefficient vectors
-    for (int i = 0; i < terms; ++i) {
-      OutputType cvec{};
-      for (std::size_t d = 0; d < outDim_; ++d)
-        cvec[d] = C(i, d);
-      coeffs_[i] = cvec;
+    coeffs_.resize(total * outDim_);
+    std::vector<long double> slice(n_), newton, buf(total);
+    for (std::size_t od = 0; od < outDim_; ++od) {
+      // copy plane
+      for (std::size_t idx = 0; idx < total; ++idx)
+        buf[idx] = Y(idx, od);
+      // perform BP along each dimension
+      for (std::size_t d = 0; d < dim_; ++d) {
+        std::size_t stride = ipow(n_, d);
+        std::size_t plane = stride * n_;
+        std::size_t outer = total / plane;
+        for (std::size_t o = 0; o < outer; ++o) {
+          std::size_t base_o = o * plane;
+          for (std::size_t i = 0; i < stride; ++i) {
+            for (int k = 0; k < n_; ++k)
+              slice[k] = buf[base_o + i + k * stride];
+            bp_solve(nodes_, slice, newton);
+            for (int k = 0; k < n_; ++k)
+              buf[base_o + i + k * stride] = newton[k];
+          }
+        }
+      }
+      for (std::size_t idx = 0; idx < total; ++idx)
+        coeffs_[od * total + idx] = buf[idx];
     }
   }
-
-  // evaluate polynomial sum_i coeffs_[i] * monomial(x,i)
-  OutputType evaluate_poly(const InputType &x) const {
+  OutputType eval(const InputType &xin) const {
+    long double t[dim_];
+    for (std::size_t d = 0; d < dim_; ++d)
+      t[d] = (2.0L * xin[d] - low_[d] - hi_[d]) / (hi_[d] - low_[d]);
+    // reverse order for Horner layout
+    long double tRev[dim_];
+    for (std::size_t d = 0; d < dim_; ++d)
+      tRev[d] = t[dim_ - 1 - d];
+    const std::size_t total = ipow(n_, dim_);
     OutputType y{};
-    int terms = static_cast<int>(coeffs_.size());
-    for (int i = 0; i < terms; ++i) {
-      double m = monomial(x, i);
-      // accumulate vector result
-      for (std::size_t d = 0; d < outDim_; ++d)
-        y[d] += coeffs_[i][d] * m;
+    for (std::size_t od = 0; od < outDim_; ++od) {
+      const long double *c = &coeffs_[od * total];
+      long double val = HornerEval<dim_>::eval(c, tRev, nodes_.data(), n_);
+      y[od] = static_cast<double>(val);
     }
     return y;
   }
-
-  // compute monomial index->value
-  double monomial(const InputType &x, int idx) const {
-    double prod = 1.0;
-    int code = idx;
-    for (std::size_t d = 0; d < dim_; ++d) {
-      int p = code % degree_;
-      code /= degree_;
-      prod *= std::pow(x[d], p);
-    }
-    return prod;
-  }
 };
 
+/*============================== benchmark ================================*/
 int main() {
   using Vec3 = std::array<double, 3>;
-
-  // scalar function f: R^3->R
   auto fScalar = [](const Vec3 &x) {
     return std::exp(std::sin(3.0 * x[0]) * std::cos(2.0 * x[1]) * std::cos(x[2])) + std::cos(x[0] + x[1] - x[2]);
   };
-  // vector-valued function fVec: R^3->R^3
   auto fVec = [&](const Vec3 &x) {
     double r = fScalar(x);
     return Vec3{r, r * r, std::sin(r)};
   };
 
   Vec3 a{-1.0, -1.0, -1.0}, b{1.0, 1.0, 1.0};
-  constexpr int N = 16;
-  const int Ntest = 1000;
+  constexpr int DEG = 16;   // polynomial degree per axis
+  const int Ntest = 100000; // benchmarking samples
+  // build interpolant
+  auto t0 = std::chrono::high_resolution_clock::now();
+  FuncEvalND<decltype(fVec)> approx(fVec, DEG, a, b);
+  auto t1 = std::chrono::high_resolution_clock::now();
+  std::cout << "Init: " << std::chrono::duration<double, std::milli>(t1 - t0).count() << " ms\n";
 
-  // Time the initialization (fitting)
-  auto t_init_start = std::chrono::high_resolution_clock::now();
-  FuncEvalND<decltype(fVec), 0, 1> approx(fVec, N, a, b);
-  auto t_init_end = std::chrono::high_resolution_clock::now();
-  auto init_ms = std::chrono::duration<double, std::milli>(t_init_end - t_init_start).count();
-  std::cout << "Initialization time: " << init_ms << " ms" << std::endl;
-
-  // Prepare random data
+  // random points
   std::mt19937 gen(42);
   std::uniform_real_distribution<double> dist(-1.0, 1.0);
-  double err2 = 0.0, norm2 = 0.0;
+  std::vector<Vec3> pts(Ntest);
+  for (auto &p : pts)
+    for (double &c : p)
+      c = dist(gen);
 
-  // Time the evaluation loop
-  auto t_eval_start = std::chrono::high_resolution_clock::now();
-  for (int i = 0; i < Ntest; ++i) {
-    Vec3 x;
-    for (int d = 0; d < 3; ++d)
-      x[d] = dist(gen);
-    auto vExact = fVec(x);
-    auto vPoly = approx(x);
+  // analytic timing
+  auto ta0 = std::chrono::high_resolution_clock::now();
+  double norm2 = 0.0;
+  for (const auto &p : pts) {
+    auto v = fVec(p);
+    for (double v_i : v)
+      norm2 += v_i * v_i;
+  }
+  auto ta1 = std::chrono::high_resolution_clock::now();
+  double tAnalytic = std::chrono::duration<double, std::milli>(ta1 - ta0).count();
+
+  // polynomial timing + error
+  auto tp0 = std::chrono::high_resolution_clock::now();
+  double err2 = 0.0;
+  for (const auto &p : pts) {
+    auto vExact = fVec(p);
+    auto vPoly = approx(p);
     for (int d = 0; d < 3; ++d) {
       double e = vExact[d] - vPoly[d];
       err2 += e * e;
-      norm2 += vExact[d] * vExact[d];
     }
   }
-  auto t_eval_end = std::chrono::high_resolution_clock::now();
-  auto eval_ms = std::chrono::duration<double, std::milli>(t_eval_end - t_eval_start).count();
-  std::cout << "Evaluation time: " << eval_ms << " ms" << std::endl;
-  // Report results
-  std::cout << "Total time: " << init_ms + eval_ms << " ms";
-  std::cout << "Relative L2 error: " << std::sqrt(err2 / norm2) << std::endl;
-  return 0;
+  auto tp1 = std::chrono::high_resolution_clock::now();
+  double tPoly = std::chrono::duration<double, std::milli>(tp1 - tp0).count();
+
+  std::cout << "Analytic eval:  " << tAnalytic << " ms (" << tAnalytic / Ntest * 1e6 << " µs/pt)\n";
+  std::cout << "Poly eval:      " << tPoly << " ms (" << tPoly / Ntest * 1e6 << " µs/pt)\n";
+  std::cout << "Rel L2 error:   " << std::sqrt(err2 / norm2) << "\n";
 }
