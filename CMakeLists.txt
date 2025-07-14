@@ -58,6 +58,7 @@ CPMAddPackage(
         GIT_TAG mdspan-0.6.0
 )
 
+
 add_library(cheb INTERFACE)
 target_include_directories(cheb INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/cheb)
 target_link_libraries(cheb INTERFACE xsimd std::mdspan)
@@ -117,7 +118,20 @@ target_compile_options(poly_eval PRIVATE -march=native)
 target_link_libraries(poly_eval PRIVATE cheb)
 
 
+
+CPMAddPackage(
+        NAME Eigen
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        GIT_TAG 3.4.0
+        DOWNLOAD_ONLY YES
+)
+if(Eigen_ADDED)
+    add_library(Eigen INTERFACE IMPORTED)
+    target_include_directories(Eigen INTERFACE ${Eigen_SOURCE_DIR})
+endif()
+
 add_executable(funcND funcND.cpp)
 target_compile_features(funcND PRIVATE cxx_std_20)
 target_compile_options(funcND PRIVATE -march=native)
-target_link_libraries(funcND PRIVATE cheb nda::nda_c)
+target_link_libraries(funcND PRIVATE cheb Eigen)
+

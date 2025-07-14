@@ -12,9 +12,9 @@ def main():
         f = lambda x: (np.exp(np.sin(3 * x[..., 0]) * np.cos(2 * x[..., 1]))
                        + np.cos(x[..., 0] + x[..., 1]))
     elif dim == 3:
-        f = lambda x: (np.exp(np.sin(3 * x[..., 0]) * np.cos(2 * x[..., 1]) *
-            np.cos(x[..., 2]))
-                       + np.cos(x[..., 0] + x[..., 1] - x[..., 2]))
+    f = lambda x: (np.exp(np.sin(3 * x[..., 0]) * np.cos(2 * x[..., 1]) *
+        np.cos(x[..., 2]))
+                   + np.cos(x[..., 0] + x[..., 1] - x[..., 2]))
 
     max_deg = 8
     n_samples = 10
