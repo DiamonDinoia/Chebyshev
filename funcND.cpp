@@ -102,7 +102,7 @@ private:
         V(idx, mon) = pval;
       }
     }
-    Eigen::MatrixXd C = V.householderQr().solve(`Y);
+    Eigen::MatrixXd C = V.householderQr().solve(Y);
     // copy into flat coeffs_
     coeffs_.resize(terms);
     for (int i = 0; i < terms; ++i) {
