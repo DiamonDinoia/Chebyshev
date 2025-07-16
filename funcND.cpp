@@ -1,51 +1,66 @@
 #include <Eigen/Dense>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <experimental/mdspan> // or <mdspan> in C++23
+#include <functional>
 #include <iostream>
 #include <random>
 #include <type_traits>
+#include <utility> // for index_sequence
 #include <vector>
 
-// Bring in function_traits and Buffer from poly_eval
-#include "fast_eval.hpp"
+#include "fast_eval.hpp" // for function_traits
 
-#include <chrono>
+namespace stdex = std::experimental;
 using namespace poly_eval;
 
-// FuncEvalND: fits a vector-valued multivariate polynomial via least squares
-// Template parameters:
-//  Func               - callable InputType -> OutputType
-//  N_compile_time     - compile-time degree (0 => dynamic)
-//  Iters_compile_time - number of refinement passes (optional)
-
+// ================================================
+// FuncEvalND: N-dimensional, M-output polynomial fit
+// with streaming least-squares to avoid large V/Y
+// ================================================
 template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_time = 1> class FuncEvalND {
 public:
   using InputArg0 = typename function_traits<Func>::arg0_type;
   using InputType = std::remove_cvref_t<InputArg0>;
   using OutputType = typename function_traits<Func>::result_type;
 
-  static constexpr std::size_t kDegreeCompileTime = N_compile_time;
-  static constexpr std::size_t kItersCompileTime = Iters_compile_time;
+  static constexpr std::size_t dim_ = std::tuple_size_v<InputType>;
+  static constexpr std::size_t outDim_ = std::tuple_size_v<OutputType>;
 
-  // dynamic-degree constructor
-  template <std::size_t Cur = N_compile_time, typename = std::enable_if_t<Cur == 0>>
-  FuncEvalND(Func f, int n, const InputType &a, const InputType &b) : func_(f), degree_(n), low_(a), hi_(b) {
+  // dynamic-degree constructor only
+  template <std::size_t C = N_compile_time, typename = std::enable_if_t<C == 0>>
+  FuncEvalND(Func f, int n, InputType const &a, InputType const &b) : func_(f), degree_(n), low_(a), hi_(b) {
     initialize(n, a, b);
   }
 
-  // evaluate at a single point
-  OutputType operator()(const InputType &pt) const { return evaluate_poly(pt); }
+  // Evaluate at one point
+  OutputType operator()(InputType const &x) const { return evaluate_poly(x); }
 
 private:
   Func func_;
   int degree_;
-  static constexpr std::size_t dim_ = std::tuple_size_v<InputType>;
-  static constexpr std::size_t outDim_ = std::tuple_size_v<OutputType>;
   InputType low_, hi_;
-  Buffer<OutputType, N_compile_time> coeffs_;
+  std::vector<OutputType> coeffs_; // flat, size = n^dim_
 
-  // build sample matrix and solve for vector coefficients
-  void initialize(int n, const InputType &a, const InputType &b) {
+  // mdspan types (column-major so axis-0 fastest)
+  using extents_t = stdex::dextents<std::size_t, dim_>;
+  using mdspan_t = stdex::mdspan<OutputType, extents_t, stdex::layout_left>;
+  using mapping_t = typename mdspan_t::mapping_type;
+
+  mapping_t mapping_;
+  mdspan_t coeffs_md_;
+
+  // helper to build extents = {n,n,...}
+  template <std::size_t... Is> static extents_t make_extents_impl(int n, std::index_sequence<Is...>) {
+    return extents_t{((void)Is, std::size_t(n))...};
+  }
+  static extents_t make_extents(int n) { return make_extents_impl(n, std::make_index_sequence<dim_>{}); }
+
+  // ------------------------------------------------
+  // Streaming initialize: accumulate A = VᵀV, B = VᵀY
+  // ------------------------------------------------
+  void initialize(int n, InputType const &a, InputType const &b) {
     const int samples = 2 * n;
     int total = 1;
     for (std::size_t i = 0; i < dim_; ++i)
@@ -87,99 +102,150 @@ private:
         V(idx, mon) = pval;
       }
     }
-
-    // solve V * C = Y in least squares sense
-    const auto A = V.transpose() * V; // n×n
-    const auto B = V.transpose() * Y; // n×p
-    // 2) factor & solve
-    Eigen::LDLT<Eigen::MatrixXd> ldlt(A); //
-    Eigen::MatrixXd C = ldlt.solve(B);    // n×p result
-    coeffs_.clear();
+    Eigen::MatrixXd C = V.householderQr().solve(`Y);
+    // copy into flat coeffs_
     coeffs_.resize(terms);
-
-    // store term-wise coefficient vectors
     for (int i = 0; i < terms; ++i) {
-      OutputType cvec{};
-      for (std::size_t d = 0; d < outDim_; ++d)
-        cvec[d] = C(i, d);
-      coeffs_[i] = cvec;
+      OutputType tmp{};
+      for (size_t d = 0; d < outDim_; ++d)
+        tmp[d] = C(i, d);
+      coeffs_[i] = tmp;
     }
+    // wrap in mdspan
+    mapping_ = mapping_t{make_extents(n)};
+    coeffs_md_ = mdspan_t{coeffs_.data(), mapping_};
   }
 
-  // evaluate polynomial sum_i coeffs_[i] * monomial(x,i)
-  OutputType evaluate_poly(const InputType &x) const {
-    OutputType y{};
-    int terms = static_cast<int>(coeffs_.size());
-    for (int i = 0; i < terms; ++i) {
-      double m = monomial(x, i);
-      // accumulate vector result
-      for (std::size_t d = 0; d < outDim_; ++d)
-        y[d] += coeffs_[i][d] * m;
-    }
-    return y;
+  // ------------------------------------------------
+  // Horner evaluation (shared loop)
+  // ------------------------------------------------
+  template <std::size_t... Is>
+  const OutputType &get_coef_impl(const std::array<std::size_t, dim_> &idx, std::index_sequence<Is...>) const {
+    return coeffs_md_(idx[Is]...);
+  }
+  const OutputType &get_coef(const std::array<std::size_t, dim_> &idx) const {
+    return get_coef_impl(idx, std::make_index_sequence<dim_>{});
   }
 
-  // compute monomial index->value
-  double monomial(const InputType &x, int idx) const {
-    double prod = 1.0;
-    int code = idx;
-    for (std::size_t d = 0; d < dim_; ++d) {
-      int p = code % degree_;
-      code /= degree_;
-      prod *= std::pow(x[d], p);
+  OutputType evaluate_poly(InputType const &x) const {
+    std::array<std::size_t, dim_> idx{};
+    return horner<dim_>(x, idx);
+  }
+
+  template <std::size_t Rank> OutputType horner(const InputType &x, std::array<std::size_t, dim_> &idx) const {
+    // axis = Rank-1, so when Rank==1 we're looping axis=0.
+    constexpr size_t axis = Rank - 1;
+    OutputType res{};
+
+    for (int k = degree_ - 1; k >= 0; --k) {
+      idx[axis] = k;
+
+      // get the “inner” vector: recurse or direct lookup
+      OutputType inner;
+      if constexpr (Rank > 1) {
+        inner = horner<axis>(x, idx);
+      } else {
+        inner = get_coef(idx);
+      }
+
+      // Horner update
+      for (size_t d = 0; d < outDim_; ++d) {
+        res[d] = res[d] * x[axis] + inner[d];
+      }
     }
-    return prod;
+
+    return res;
   }
 };
 
 int main() {
-  using Vec3 = std::array<double, 3>;
-
-  // scalar function f: R^3->R
-  auto fScalar = [](const Vec3 &x) {
-    return std::exp(std::sin(3.0 * x[0]) * std::cos(2.0 * x[1]) * std::cos(x[2])) + std::cos(x[0] + x[1] - x[2]);
-  };
-  // vector-valued function fVec: R^3->R^3
-  auto fVec = [&](const Vec3 &x) {
-    double r = fScalar(x);
-    return Vec3{r, r * r, std::sin(r)};
-  };
-
-  Vec3 a{-1.0, -1.0, -1.0}, b{1.0, 1.0, 1.0};
-  constexpr int N = 16;
+  // --- choose dims here ---
+  constexpr size_t DimIn = 4;
+  constexpr size_t DimOut = 4;
+  constexpr int N = 8;
   const int Ntest = 1000;
 
-  // Time the initialization (fitting)
-  auto t_init_start = std::chrono::high_resolution_clock::now();
+  using VecN = std::array<double, DimIn>;
+  using OutM = std::array<double, DimOut>;
+
+  // --- define your function fVec on R^DimIn → R^DimOut ---
+  auto fScalar = [](VecN const &x) {
+    double s = 0;
+    for (double xi : x)
+      s += std::sin(xi);
+    return s;
+  };
+  auto fVec = [&](VecN const &x) {
+    double r = fScalar(x);
+    OutM y{};
+    for (size_t i = 0; i < DimOut; ++i)
+      y[i] = std::pow(r, i + 1);
+    return y;
+  };
+
+  // --- domain & degree ---
+  VecN a{}, b{};
+  a.fill(-1.0);
+  b.fill(1.0);
+
+  // --- build approximation ---
+  auto t0 = std::chrono::high_resolution_clock::now();
   FuncEvalND<decltype(fVec), 0, 1> approx(fVec, N, a, b);
-  auto t_init_end = std::chrono::high_resolution_clock::now();
-  auto init_ms = std::chrono::duration<double, std::milli>(t_init_end - t_init_start).count();
-  std::cout << "Initialization time: " << init_ms << " ms" << std::endl;
+  auto t1 = std::chrono::high_resolution_clock::now();
+  std::cout << "Init: " << std::chrono::duration<double, std::milli>(t1 - t0).count() << " ms\n";
 
-  // Prepare random data
+  // --- RNG setup ---
   std::mt19937 gen(42);
-  std::uniform_real_distribution<double> dist(-1.0, 1.0);
-  double err2 = 0.0, norm2 = 0.0;
+  std::uniform_real_distribution<double> dist(-1, 1);
 
-  // Time the evaluation loop
-  auto t_eval_start = std::chrono::high_resolution_clock::now();
+  // --- benchmark analytical eval & sum ---
+  double sumAnalytic = 0.0;
+  auto ta0 = std::chrono::high_resolution_clock::now();
+  gen.seed(42);
   for (int i = 0; i < Ntest; ++i) {
-    Vec3 x;
-    for (int d = 0; d < 3; ++d)
-      x[d] = dist(gen);
-    auto vExact = fVec(x);
-    auto vPoly = approx(x);
-    for (int d = 0; d < 3; ++d) {
-      double e = vExact[d] - vPoly[d];
+    VecN x;
+    for (auto &xi : x)
+      xi = dist(gen);
+    auto y = fVec(x);
+    for (double v : y)
+      sumAnalytic += v;
+  }
+  auto ta1 = std::chrono::high_resolution_clock::now();
+  double analytic_ms = std::chrono::duration<double, std::milli>(ta1 - ta0).count();
+  std::cout << "Analytical eval over " << Ntest << " pts: " << analytic_ms << " ms, sumAnalytic=" << sumAnalytic
+            << "\n";
+
+  // --- benchmark polynomial eval & sum ---
+  double sumPoly = 0.0;
+  auto tp0 = std::chrono::high_resolution_clock::now();
+  gen.seed(42);
+  for (int i = 0; i < Ntest; ++i) {
+    VecN x;
+    for (auto &xi : x)
+      xi = dist(gen);
+    auto y = approx(x);
+    for (double v : y)
+      sumPoly += v;
+  }
+  auto tp1 = std::chrono::high_resolution_clock::now();
+  double poly_ms = std::chrono::duration<double, std::milli>(tp1 - tp0).count();
+  std::cout << "Polynomial eval over " << Ntest << " pts: " << poly_ms << " ms, sumPoly=" << sumPoly << "\n";
+
+  // --- compute relative L2 error on same points ---
+  double err2 = 0.0, norm2 = 0.0;
+  gen.seed(42);
+  for (int i = 0; i < Ntest; ++i) {
+    VecN x;
+    for (auto &xi : x)
+      xi = dist(gen);
+    auto vE = fVec(x), vP = approx(x);
+    for (size_t d = 0; d < DimOut; ++d) {
+      double e = vE[d] - vP[d];
       err2 += e * e;
-      norm2 += vExact[d] * vExact[d];
+      norm2 += vE[d] * vE[d];
     }
   }
-  auto t_eval_end = std::chrono::high_resolution_clock::now();
-  auto eval_ms = std::chrono::duration<double, std::milli>(t_eval_end - t_eval_start).count();
-  std::cout << "Evaluation time: " << eval_ms << " ms" << std::endl;
-  // Report results
-  std::cout << "Total time: " << init_ms + eval_ms << " ms";
-  std::cout << "Relative L2 error: " << std::sqrt(err2 / norm2) << std::endl;
+  std::cout << "Relative L2 error: " << std::sqrt(err2 / norm2) << "\n";
+
   return 0;
 }
