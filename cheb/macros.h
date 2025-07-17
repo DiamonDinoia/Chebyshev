@@ -64,10 +64,10 @@
 #define ASSUME(cond) __builtin_assume(cond)
 #elif defined(__GNUC__) || defined(__GNUG__)
 #define ASSUME(cond)                                                                                                   \
-  do {                                                                                                                 \
-    if (!(cond))                                                                                                       \
-      __builtin_unreachable();                                                                                         \
-  } while (0)
+    do {                                                                                                               \
+        if (!(cond))                                                                                                   \
+            __builtin_unreachable();                                                                                   \
+    } while (0)
 #else
 #define ASSUME(cond) ((void)0)
 #endif

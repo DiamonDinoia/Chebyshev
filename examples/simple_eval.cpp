@@ -1,23 +1,22 @@
 #include "fast_eval.hpp" // Assuming your poly_eval.h is renamed to fast_eval.h
 
-#include <iostream>
-#include <vector>
+#include <cmath> // For std::cos, std::sin, std::abs
 #include <complex>
-#include <cmath>     // For std::cos, std::sin, std::abs
-#include <iomanip>   // For std::scientific, std::setprecision, std::setw, std::left, std::right
-#include <random>    // For std::random_device, std::mt19937, std::uniform_real_distribution
-#include <limits>    // For std::numeric_limits
-
+#include <iomanip> // For std::scientific, std::setprecision, std::setw, std::left, std::right
+#include <iostream>
+#include <limits> // For std::numeric_limits
+#include <random> // For std::random_device, std::mt19937, std::uniform_real_distribution
+#include <vector>
 
 // Helper function to perform and print error checks in a table format
-template<typename TFunc, typename TPoly, typename TInput>
-void check_errors(TFunc original_func, TPoly poly_evaluator,
-                  TInput domain_a, TInput Input_b, const std::string& description) {
+template <typename TFunc, typename TPoly, typename TInput>
+void check_errors(TFunc original_func, TPoly poly_evaluator, TInput domain_a, TInput Input_b,
+                  const std::string &description) {
     // Explicitly deduce TOutput from the TPoly's OutputType
     using TOutput = typename TPoly::OutputType;
 
-    std::cout << "\n--- Relative Error Check for " << description
-              << " on [" << domain_a << ", " << Input_b << "] ---\n";
+    std::cout << "\n--- Relative Error Check for " << description << " on [" << domain_a << ", " << Input_b
+              << "] ---\n";
 
     // Set precision for scientific notation for values. Adjusted for better complex number display.
     std::cout << std::scientific << std::setprecision(8);
@@ -26,7 +25,7 @@ void check_errors(TFunc original_func, TPoly poly_evaluator,
     const int INDEX_WIDTH = 5;
     // Increased width for points and values to accommodate complex numbers better
     const int POINT_WIDTH = 30;
-    const int VALUE_WIDTH = 35;  // Significantly increased to fit complex<double> output
+    const int VALUE_WIDTH = 35; // Significantly increased to fit complex<double> output
     const int ERROR_WIDTH = 22;
 
     // Print table header
@@ -39,7 +38,6 @@ void check_errors(TFunc original_func, TPoly poly_evaluator,
     // Print a separator line
     // Calculate total width of the separator based on column widths
     std::cout << std::string(INDEX_WIDTH + POINT_WIDTH + VALUE_WIDTH * 2 + ERROR_WIDTH, '-') << "\n";
-
 
     // Random number generation setup
     std::random_device rd;
@@ -65,7 +63,6 @@ void check_errors(TFunc original_func, TPoly poly_evaluator,
     std::cout << "\n"; // Add a newline after each table for spacing
 }
 
-
 int main() {
     // Define some example functions
     auto my_func_double = [](double x) { return std::cos(2 * x); };
@@ -86,8 +83,7 @@ int main() {
     std::cout << "Coefficients count: " << poly_runtime_d_default_iters.coeffs().size() << std::endl;
 
     // Call the helper for error checking
-    check_errors(my_func_double, poly_runtime_d_default_iters,
-                 domain_a1, domain_b1, "my_func_double (n=16, iters=1)");
+    check_errors(my_func_double, poly_runtime_d_default_iters, domain_a1, domain_b1, "my_func_double (n=16, iters=1)");
 
     // -----------------------------------------------------
     // 2. Runtime Degree (n), Custom Compile-Time Iterations
@@ -101,9 +97,7 @@ int main() {
     std::cout << "Coefficients count: " << poly_runtime_f_3iters.coeffs().size() << std::endl;
 
     // Call the helper for error checking
-    check_errors(my_func_float, poly_runtime_f_3iters,
-                 domain_a2, domain_b2, "my_func_float (n=8, iters=1)");
-
+    check_errors(my_func_float, poly_runtime_f_3iters, domain_a2, domain_b2, "my_func_float (n=8, iters=1)");
 
     // -----------------------------------------------------
     // 3. Compile-Time Degree (N), Default Iterations (1)
@@ -117,9 +111,8 @@ int main() {
     std::cout << "Coefficients count: " << poly_compiletime_d_default_iters.coeffs().size() << std::endl;
 
     // Call the helper for error checking
-    check_errors(my_func_double, poly_compiletime_d_default_iters,
-                 domain_a3, domain_b3, "my_func_double (N=6, iters=1)");
-
+    check_errors(my_func_double, poly_compiletime_d_default_iters, domain_a3, domain_b3,
+                 "my_func_double (N=6, iters=1)");
 
     // -----------------------------------------------------
     // 4. Compile-Time Degree (N), Custom Compile-Time Iterations
@@ -133,8 +126,7 @@ int main() {
     std::cout << "Coefficients count: " << poly_compiletime_c_2iters.coeffs().size() << std::endl;
 
     // Call the helper for error checking
-    check_errors(my_func_complex, poly_compiletime_c_2iters,
-                 domain_a4, domain_b4, "my_func_complex (N=8, iters=2)");
+    check_errors(my_func_complex, poly_compiletime_c_2iters, domain_a4, domain_b4, "my_func_complex (N=8, iters=2)");
 
     return 0;
 }

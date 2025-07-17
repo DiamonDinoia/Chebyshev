@@ -118,7 +118,6 @@ target_compile_options(poly_eval PRIVATE -march=native)
 target_link_libraries(poly_eval PRIVATE cheb)
 
 
-
 CPMAddPackage(
         NAME Eigen
         GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
