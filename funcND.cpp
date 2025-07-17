@@ -31,19 +31,18 @@ template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_
 
     // Compile‑time degree constructor
     template <std::size_t C = N_compile_time, typename = std::enable_if_t<(C != 0)>>
-    constexpr FuncEvalND(Func f, const InputType &a, const InputType &b)
-        : func_(f), degree_(static_cast<int>(C)), low_(a), hi_(b) {
-        initialize(static_cast<int>(C), a, b);
+    constexpr FuncEvalND(Func f, const InputType &a, const InputType &b) : func_(f), degree_(static_cast<int>(C)) {
+        compute_scaling(a, b);
+        initialize(static_cast<int>(C));
     }
 
     // Run‑time degree constructor
     template <std::size_t C = N_compile_time, typename = std::enable_if_t<(C == 0)>>
-    constexpr FuncEvalND(Func f, int n, const InputType &a, const InputType &b)
-        : func_(f), degree_(n), low_(a), hi_(b) {
-        initialize(n, a, b);
+    constexpr FuncEvalND(Func f, int n, const InputType &a, const InputType &b) : func_(f), degree_(n) {
+        compute_scaling(a, b);
+        initialize(n);
     }
 
-    [[gnu::always_inline]]
     OutputType operator()(const InputType &x) const {
         return horner<N_compile_time, OutputType>(x, coeffs_md_, degree_);
     }
@@ -58,6 +57,7 @@ template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_
     using extents_t = stdex::dextents<std::size_t, dim_ + 1>;
     using mdspan_t = stdex::mdspan<CoeffType, extents_t, stdex::layout_left>;
     using mapping_t = typename mdspan_t::mapping_type;
+    using MatrixType = Eigen::Matrix<CoeffType, Eigen::Dynamic, Eigen::Dynamic>;
 
     mapping_t mapping_;
     mdspan_t coeffs_md_;
@@ -68,72 +68,102 @@ template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_
     }
     static constexpr extents_t make_extents(int n) { return make_extents(n, std::make_index_sequence<dim_ + 1>{}); }
 
-    void initialize(int n, const InputType &a, const InputType &b) {
+    void initialize(int n) {
         const int samples = 2 * n;
-        std::size_t gridSize = 1;
-        for (std::size_t i = 0; i < dim_; ++i)
-            gridSize *= samples;
-
-        std::size_t terms = 1;
-        for (std::size_t i = 0; i < dim_; ++i)
+        std::size_t terms = 1, gridSize = 1;
+        for (std::size_t i = 0; i < dim_; ++i) {
             terms *= n;
+            gridSize *= samples;
+        }
 
-        Eigen::MatrixXd V(gridSize, terms);
-        Eigen::MatrixXd Y(gridSize, outDim_);
+        MatrixType V(gridSize, terms), powers(dim_, n), Y(gridSize, outDim_);
 
-        /* Chebyshev nodes on [-1,1] */
-        std::vector<double> nodes(samples);
+        std::vector<CoeffType> nodes(samples);
         for (int i = 0; i < samples; ++i)
-            nodes[i] = std::cos((2.0 * i + 1.0) * M_PI / (2.0 * samples));
+            nodes[i] = static_cast<CoeffType>(std::cos((2.0 * i + 1.0) * M_PI / (2.0 * samples)));
 
-        /* Fill Vandermonde V and samples Y */
-        for (std::size_t idx = 0; idx < gridSize; ++idx) {
-            std::size_t tmp = idx;
-            InputType x;
+        std::array<int, dim_> gridIdx{};
+
+        for (std::size_t row = 0; row < gridSize; ++row) {
+            InputType t{};
             for (std::size_t d = 0; d < dim_; ++d) {
-                int id = static_cast<int>(tmp % samples);
-                tmp /= samples;
-                double t = nodes[id];
-                x[d] = 0.5 * (a[d] + b[d]) + 0.5 * (b[d] - a[d]) * t;
+                t[d] = nodes[gridIdx[d]];
+                powers(d, 0) = CoeffType(1);
+                for (int k = 1; k < n; ++k)
+                    powers(d, k) = powers(d, k - 1) * t[d];
             }
-            auto fx = func_(x);
-            for (std::size_t d = 0; d < outDim_; ++d)
-                Y(idx, d) = fx[d];
 
-            for (std::size_t mon = 0; mon < terms; ++mon) {
-                std::size_t code = mon;
-                double pval = 1.0;
+            InputType x_phys = map_to_domain(t);
+            auto fx = func_(x_phys);
+            for (std::size_t d = 0; d < outDim_; ++d)
+                Y(row, d) = fx[d];
+
+            std::array<int, dim_> monoIdx{};
+            for (std::size_t col = 0; col < terms; ++col) {
+                CoeffType p = CoeffType(1);
+                for (std::size_t d = 0; d < dim_; ++d)
+                    p *= powers(d, monoIdx[d]);
+                V(row, col) = p;
+
+                // increment the multi‐index
                 for (std::size_t d = 0; d < dim_; ++d) {
-                    int p = static_cast<int>(code % n);
-                    code /= n;
-                    pval *= std::pow(x[d], p);
+                    if (++monoIdx[d] == n)
+                        monoIdx[d] = 0;
+                    else
+                        break;
                 }
-                V(idx, mon) = pval;
+            }
+
+            for (std::size_t d = 0; d < dim_; ++d) {
+                if (++gridIdx[d] == samples)
+                    gridIdx[d] = 0;
+                else
+                    break;
             }
         }
 
-        using namespace Eigen;
-        HouseholderQR<MatrixXd> qr(V);
-        MatrixXd R_full = qr.matrixQR().triangularView<Upper>();
-        MatrixXd Q_full = qr.householderQ();
+        Eigen::HouseholderQR<MatrixType> qr(V);
+        MatrixType R_full = qr.matrixQR().template triangularView<Eigen::Upper>();
+        MatrixType Q_full = qr.householderQ();
 
         const int cols = static_cast<int>(terms);
-        MatrixXd Q = Q_full.leftCols(cols);
-        MatrixXd R = R_full.topRows(cols);
+        auto Q = Q_full.leftCols(cols);
+        auto R = R_full.topRows(cols);
+        coeffs_flat_.resize(cols * outDim_);
+        Eigen::Map<MatrixType> C(coeffs_flat_.data(), cols, outDim_);
+        C = R.template triangularView<Eigen::Upper>().solve(Q.transpose() * Y);
 
-        MatrixXd C = R.triangularView<Upper>().solve(Q.transpose() * Y);
-
-        /* iterative refinement controlled by compile-time constant */
         for (std::size_t pass = 0; pass < kItersCompileTime; ++pass) {
-            MatrixXd r = Y - V * C;
-            MatrixXd delta = R.triangularView<Upper>().solve(Q.transpose() * r);
+            auto r = Y - V * C;
+            auto delta = R.template triangularView<Eigen::Upper>().solve(Q.transpose() * r).eval();
             C += delta;
         }
 
-        /* Flatten & wrap */
-        coeffs_flat_.assign(C.data(), C.data() + C.size());
+        // coeffs_flat_.assign(C.data(), C.data() + C.size());
         mapping_ = mapping_t{make_extents(n)};
         coeffs_md_ = mdspan_t{coeffs_flat_.data(), mapping_};
+    }
+
+    C20CONSTEXPR InputType map_to_domain(const InputType &t) const noexcept {
+        InputType out{};
+        for (std::size_t d = 0; d < dim_; ++d)
+            out[d] = static_cast<typename InputType::value_type>(0.5 * (t[d] / low_[d] + hi_[d]));
+        return out;
+    }
+
+    ALWAYS_INLINE C20CONSTEXPR InputType map_from_domain(const InputType &x) const noexcept {
+        InputType out{};
+        for (std::size_t d = 0; d < dim_; ++d)
+            out[d] = static_cast<typename InputType::value_type>((typename InputType::value_type(2) * x[d] - hi_[d]) *
+                                                                 low_[d]);
+        return out;
+    }
+
+    void compute_scaling(const InputType &a, const InputType &b) noexcept {
+        for (std::size_t d = 0; d < dim_; ++d) {
+            low_[d] = typename InputType::value_type(1) / (b[d] - a[d]);
+            hi_[d] = b[d] + a[d];
+        }
     }
 };
 
