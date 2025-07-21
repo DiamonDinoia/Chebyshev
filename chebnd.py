@@ -1,19 +1,13 @@
-import numpy as np
-import matplotlib.pyplot as plt
 import itertools
-
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.linalg as la
+import time
 
 def horner_nd(coef_nd, x):
-    """
-    Evaluate a multivariate polynomial at point x using Horner's method.
-    coef_nd should be an array of shape (d0, d1, ..., d_{dim-1}), where di is degree count for x[i].
-    x is a 1D array of length dim.
-    """
     dim = coef_nd.ndim
-
     def rec(c, axis):
         if axis == dim - 1:
-            # Last dimension: 1D Horner
             res = 0.0
             for coeff in c[::-1]:
                 res = res * x[axis] + coeff
@@ -23,9 +17,7 @@ def horner_nd(coef_nd, x):
             for sub_c in c[::-1]:
                 res = res * x[axis] + rec(sub_c, axis + 1)
             return res
-
     return rec(coef_nd, 0)
-
 
 def main():
     # Dimension: choose 1, 2, or 3
@@ -45,58 +37,94 @@ def main():
                 + np.cos(x[..., 0] + x[..., 1] - x[..., 2])
         )
 
-    max_deg = 16  # Degree count per dimension
-    n_samples = 2 * max_deg  # Number of sample points per dimension for fitting
-    n_eval = 1000  # Number of random evaluation points
+    max_deg = 16
+    n_samples = 1 * max_deg
+    n_eval = 1000
 
-    # Generate Chebyshev nodes for fitting
     nodes_1d = [np.cos(np.pi * (i + 0.5) / n_samples) for i in range(n_samples)]
     nodes = [nodes_1d] * dim
-
-    # Evaluate function on fitting grid
-    X_fit = np.array(list(itertools.product(*nodes)))  # Shape: (n_samples**dim, dim)
+    X_fit = np.array(list(itertools.product(*nodes)))
     y_fit = f(X_fit)
 
-    # Build Vandermonde for least-squares fit
+    # --- Full solve timing ---
+    start = time.perf_counter()
+
     degs = [range(max_deg)] * dim
     V = np.array([
         [np.prod([x[i] ** n[i] for i in range(dim)]) for n in itertools.product(*degs)]
         for x in X_fit
     ])
-
-    # Solve for coefficients
     coef_flat, *_ = np.linalg.lstsq(V, y_fit, rcond=None)
     coef_nd = coef_flat.reshape([max_deg] * dim)
 
-    # Generate random evaluation points in [-1, 1]^dim
-    np.random.seed(0)
+    elapsed_full = time.perf_counter() - start
+    print(f"Full least-squares solve time: {elapsed_full:.4f} sec")
+
+    # --- Separable solve if dim == 2 ---
+    if dim == 2:
+        start = time.perf_counter()
+
+        nodes_1d = np.array(nodes_1d)
+        V = np.vander(nodes_1d, N=max_deg, increasing=True)
+        A = np.empty((max_deg, n_samples))
+
+        # Step 1: Solve in x direction (for fixed y_j)
+        for j, yj in enumerate(nodes_1d):
+            f_col = np.array([
+                f(np.array([[xi, yj]]))[0] for xi in nodes_1d
+            ])
+            a_col = la.solve(V, f_col)
+            A[:, j] = a_col
+
+        # Step 2: Solve in y direction (for fixed x^i)
+        coef_sep = np.empty((max_deg, max_deg))
+        for i in range(max_deg):
+            a_row = A[i, :]
+            c_row = la.solve(V, a_row)
+            coef_sep[i, :] = c_row
+
+        elapsed_sep = time.perf_counter() - start
+        print(f"Separable 1D-by-1D solve time: {elapsed_sep:.4f} sec")
+
+    # --- Evaluation ---
+    np.random.seed(42)
     X_eval = np.random.uniform(-1, 1, size=(n_eval, dim))
     y_true = f(X_eval)
 
-    # Evaluate polynomial at random points using Horner's method
     y_est = np.array([horner_nd(coef_nd, x) for x in X_eval])
-
-    # Compute relative L2 error
     rel_err = np.linalg.norm(y_true - y_est) / np.linalg.norm(y_true)
     print(f"Relative ℓ² error on random points: {rel_err:e}")
 
-    # Plot comparison
+    if dim == 2:
+        y_est_sep = np.array([horner_nd(coef_sep, x) for x in X_eval])
+        rel_err_sep = np.linalg.norm(y_true - y_est_sep) / np.linalg.norm(y_true)
+        print(f"Relative ℓ² error (separable 1D solve): {rel_err_sep:e}")
+
     if dim == 1:
-        # Sort for plotting
         idx = np.argsort(X_eval[:, 0])
         plt.plot(X_eval[idx, 0], y_true[idx], label='True')
         plt.plot(X_eval[idx, 0], y_est[idx], '--', label='Horner')
         plt.legend()
         plt.show()
     else:
-        # Scatter true vs estimated
+        plt.figure(figsize=(12, 5))
+        plt.subplot(1, 2, 1)
         plt.scatter(y_true, y_est, s=5)
         plt.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'k--')
         plt.xlabel('True values')
         plt.ylabel('Estimated via Horner')
         plt.title(f'True vs Estimated (dim={dim})')
-        plt.show()
 
+        if dim == 2:
+            plt.subplot(1, 2, 2)
+            plt.scatter(y_true, y_est_sep, s=5, color='orange')
+            plt.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'k--')
+            plt.xlabel('True values')
+            plt.ylabel('Separable fit')
+            plt.title('True vs Separable 1D Fit')
+
+        plt.tight_layout()
+        plt.show()
 
 if __name__ == "__main__":
     main()

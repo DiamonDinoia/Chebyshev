@@ -20,8 +20,7 @@ template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_
     using InputArg0 = typename function_traits<Func>::arg0_type;
     using InputType = std::remove_cvref_t<InputArg0>;
     using OutputType = typename function_traits<Func>::result_type;
-
-    using CoeffType = OutputType::value_type;
+    using CoeffType = typename OutputType::value_type;
 
     static constexpr std::size_t dim_ = std::tuple_size_v<InputType>;
     static constexpr std::size_t outDim_ = std::tuple_size_v<OutputType>;
@@ -125,21 +124,17 @@ template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_
         Eigen::HouseholderQR<MatrixType> qr(V);
         MatrixType R_full = qr.matrixQR().template triangularView<Eigen::Upper>();
         MatrixType Q_full = qr.householderQ();
-
         const int cols = static_cast<int>(terms);
         auto Q = Q_full.leftCols(cols);
         auto R = R_full.topRows(cols);
         coeffs_flat_.resize(cols * outDim_);
         Eigen::Map<MatrixType> C(coeffs_flat_.data(), cols, outDim_);
         C = R.template triangularView<Eigen::Upper>().solve(Q.transpose() * Y);
-
         for (std::size_t pass = 0; pass < kItersCompileTime; ++pass) {
             auto r = Y - V * C;
             auto delta = R.template triangularView<Eigen::Upper>().solve(Q.transpose() * r).eval();
             C += delta;
         }
-
-        // coeffs_flat_.assign(C.data(), C.data() + C.size());
         mapping_ = mapping_t{make_extents(n)};
         coeffs_md_ = mdspan_t{coeffs_flat_.data(), mapping_};
     }
@@ -171,7 +166,7 @@ int main() {
     // --- choose dims here ---
     constexpr size_t DimIn = 4;
     constexpr size_t DimOut = 4;
-    constexpr int N = 4;
+    constexpr int N = 8;
     const int Ntest = 1000;
 
     using VecN = std::array<float, DimIn>;
