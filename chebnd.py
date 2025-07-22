@@ -1,7 +1,6 @@
 import itertools
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy.linalg as la
 import time
 
 def horner_nd(coef_nd, x):
@@ -37,91 +36,123 @@ def main():
                 + np.cos(x[..., 0] + x[..., 1] - x[..., 2])
         )
 
-    max_deg = 16
-    n_samples = 1 * max_deg
+    max_deg = 4
+    n_samples = max_deg
     n_eval = 1000
 
+    # Chebyshev-like nodes
     nodes_1d = [np.cos(np.pi * (i + 0.5) / n_samples) for i in range(n_samples)]
+    # Build the full grid and sample
     nodes = [nodes_1d] * dim
     X_fit = np.array(list(itertools.product(*nodes)))
     y_fit = f(X_fit)
 
-    # --- Full solve timing ---
+    # --- Method 1: Full least-squares solve ---
     start = time.perf_counter()
-
     degs = [range(max_deg)] * dim
-    V = np.array([
+    V_full = np.array([
         [np.prod([x[i] ** n[i] for i in range(dim)]) for n in itertools.product(*degs)]
         for x in X_fit
     ])
-    coef_flat, *_ = np.linalg.lstsq(V, y_fit, rcond=None)
-    coef_nd = coef_flat.reshape([max_deg] * dim)
-
+    coef_flat, *_ = np.linalg.lstsq(V_full, y_fit, rcond=None)
+    coef_nd_full = coef_flat.reshape([max_deg] * dim)
     elapsed_full = time.perf_counter() - start
-    print(f"Full least-squares solve time: {elapsed_full:.4f} sec")
+    print(f"Full least-squares solve time: {elapsed_full:.5f} sec")
 
-    # --- Separable solve if dim == 2 ---
-    if dim == 2:
-        start = time.perf_counter()
+    # --- Method 2: Separable 1D-by-1D solve ---
+    start = time.perf_counter()
+    nodes_arr = np.array(nodes_1d)
+    V = np.vander(nodes_arr, N=max_deg, increasing=True)
+    # sample tensor F of shape (n_samples,)*dim
+    grid_pts = np.array(list(itertools.product(nodes_arr, repeat=dim)))
+    F = f(grid_pts).reshape((n_samples,) * dim)
 
-        nodes_1d = np.array(nodes_1d)
-        V = np.vander(nodes_1d, N=max_deg, increasing=True)
-        A = np.empty((max_deg, n_samples))
+    # peel off one axis at a time
+    coef_sep = F.copy()
+    for axis in range(dim):
+        # bring target axis to front
+        coef_sep = np.moveaxis(coef_sep, axis, 0)   # shape: (n_samples, ...)
+        flat = coef_sep.reshape((n_samples, -1))    # (n_samples, M)
+        solved = np.linalg.solve(V, flat)           # (max_deg, M)
+        # reshape & move axis back
+        coef_sep = solved.reshape((max_deg,) + coef_sep.shape[1:])
+        coef_sep = np.moveaxis(coef_sep, 0, axis)
+    elapsed_sep = time.perf_counter() - start
+    print(f"Separable 1D-by-1D solve time: {elapsed_sep:.5f} sec")
 
-        # Step 1: Solve in x direction (for fixed y_j)
-        for j, yj in enumerate(nodes_1d):
-            f_col = np.array([
-                f(np.array([[xi, yj]]))[0] for xi in nodes_1d
-            ])
-            a_col = la.solve(V, f_col)
-            A[:, j] = a_col
+    # --- Method 3: Separable ND-by-1D solve (generic for any dim) ---
+    start = time.perf_counter()
+    # reuse V and F from above
+    coef_nd = F.copy()
+    for axis in range(dim):
+        # move this axis to last
+        coef_nd = np.moveaxis(coef_nd, axis, -1)   # shape (..., n_samples)
+        pre_shape = coef_nd.shape[:-1]
+        M = int(np.prod(pre_shape))
+        flat_nd = coef_nd.reshape(M, n_samples)    # (M, n_samples)
+        # solve along last dim for all M fibers
+        solved_nd = np.linalg.solve(V, flat_nd.T).T # (M, max_deg)
+        # reshape back & restore axis
+        coef_nd = solved_nd.reshape(*pre_shape, max_deg)
+        coef_nd = np.moveaxis(coef_nd, -1, axis)
+    elapsed_nd = time.perf_counter() - start
+    print(f"Separable ND-by-1D solve time: {elapsed_nd:.5f} sec")
 
-        # Step 2: Solve in y direction (for fixed x^i)
-        coef_sep = np.empty((max_deg, max_deg))
-        for i in range(max_deg):
-            a_row = A[i, :]
-            c_row = la.solve(V, a_row)
-            coef_sep[i, :] = c_row
-
-        elapsed_sep = time.perf_counter() - start
-        print(f"Separable 1D-by-1D solve time: {elapsed_sep:.4f} sec")
-
-    # --- Evaluation ---
+    # --- Evaluation on random points ---
     np.random.seed(42)
     X_eval = np.random.uniform(-1, 1, size=(n_eval, dim))
     y_true = f(X_eval)
 
-    y_est = np.array([horner_nd(coef_nd, x) for x in X_eval])
-    rel_err = np.linalg.norm(y_true - y_est) / np.linalg.norm(y_true)
-    print(f"Relative ℓ² error on random points: {rel_err:e}")
+    y_est_full = np.array([horner_nd(coef_nd_full, x) for x in X_eval])
+    err_full = np.linalg.norm(y_true - y_est_full) / np.linalg.norm(y_true)
 
-    if dim == 2:
-        y_est_sep = np.array([horner_nd(coef_sep, x) for x in X_eval])
-        rel_err_sep = np.linalg.norm(y_true - y_est_sep) / np.linalg.norm(y_true)
-        print(f"Relative ℓ² error (separable 1D solve): {rel_err_sep:e}")
+    y_est_sep2 = np.array([horner_nd(coef_sep, x) for x in X_eval])
+    err_sep2 = np.linalg.norm(y_true - y_est_sep2) / np.linalg.norm(y_true)
 
+    y_est_sepND = np.array([horner_nd(coef_nd, x) for x in X_eval])
+    err_sepND = np.linalg.norm(y_true - y_est_sepND) / np.linalg.norm(y_true)
+
+    print(f"Rel. error [full]        : {err_full:e}")
+    print(f"Rel. error [sep 1D-by-1D] : {err_sep2:e}")
+    print(f"Rel. error [sep ND-by-1D] : {err_sepND:e}")
+
+    # --- Plotting (as before) ---
     if dim == 1:
         idx = np.argsort(X_eval[:, 0])
         plt.plot(X_eval[idx, 0], y_true[idx], label='True')
-        plt.plot(X_eval[idx, 0], y_est[idx], '--', label='Horner')
+        plt.plot(X_eval[idx, 0], y_est_full[idx], '--', label='Full LS')
+        plt.plot(X_eval[idx, 0], y_est_sep2[idx], '-.', label='Sep 1D×1D')
+        plt.plot(X_eval[idx, 0], y_est_sepND[idx], ':', label='Sep ND-by-1D')
         plt.legend()
+        plt.title('1D Comparison')
         plt.show()
     else:
-        plt.figure(figsize=(12, 5))
-        plt.subplot(1, 2, 1)
-        plt.scatter(y_true, y_est, s=5)
-        plt.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'k--')
-        plt.xlabel('True values')
-        plt.ylabel('Estimated via Horner')
-        plt.title(f'True vs Estimated (dim={dim})')
+        plt.figure(figsize=(18, 5))
 
-        if dim == 2:
-            plt.subplot(1, 2, 2)
-            plt.scatter(y_true, y_est_sep, s=5, color='orange')
-            plt.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], 'k--')
-            plt.xlabel('True values')
-            plt.ylabel('Separable fit')
-            plt.title('True vs Separable 1D Fit')
+        # Full LS
+        plt.subplot(1, 3, 1)
+        plt.scatter(y_true, y_est_full, s=5)
+        mn, mx = y_true.min(), y_true.max()
+        plt.plot([mn, mx], [mn, mx], 'k--')
+        plt.xlabel('True')
+        plt.ylabel('Estimated')
+        plt.title(f'Full LS (dim={dim})')
+
+        # Separable 1D-by-1D
+        plt.subplot(1, 3, 2)
+        plt.scatter(y_true, y_est_sep2, s=5, color='C1')
+        plt.plot([mn, mx], [mn, mx], 'k--')
+        plt.xlabel('True')
+        plt.ylabel('Estimated')
+        plt.title('Sep 1D×1D')
+
+        # Separable ND-by-1D
+        plt.subplot(1, 3, 3)
+        plt.scatter(y_true, y_est_sepND, s=5, color='C2')
+        plt.plot([mn, mx], [mn, mx], 'k--')
+        plt.xlabel('True')
+        plt.ylabel('Estimated')
+        plt.title('Sep ND-by-1D')
 
         plt.tight_layout()
         plt.show()

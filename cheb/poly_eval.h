@@ -327,59 +327,41 @@ ALWAYS_INLINE constexpr OutT horner_1d(const InScalar x, const OutT *c_ptr, std:
 // N‑D Horner – compile‑time degree aware
 // ------------------------------------------------------------
 
-template <std::size_t Level, // remaining axes to process
+template <std::size_t Level, // #axes still to process
           std::size_t Dim,   // full spatial rank
-          std::size_t DegCT, // compile‑time degree (0 ⇒ run‑time)
-          typename OutT, typename InVec, typename Mdspan>
+          std::size_t DegCT, // compile-time degree (0 ⇒ run-time)
+          typename OutT,     // e.g. std::array<float, outDim>
+          typename InVec,    // e.g. std::array<float, Dim>
+          typename Mdspan>   // mdspan<coeff_t, (n,…,n,outDim)>
 ALWAYS_INLINE constexpr OutT horner_nd_impl(const InVec &x, const Mdspan &coeffs, std::array<std::size_t, Dim> &idx,
                                             const int deg_rt) {
-    constexpr std::size_t axis = Dim - Level; // current axis (0‑based)
-    OutT res{};
+    constexpr std::size_t axis = Dim - Level; // current axis
+    constexpr std::size_t OUT = std::tuple_size_v<OutT>;
+    const int deg = DegCT ? int(DegCT) : deg_rt;
 
-    const int deg = DegCT ? static_cast<int>(DegCT) : deg_rt;
-    if constexpr (DegCT > 0) {
-        for (int k = deg - 1; k >= 0; --k) {
-            // constexpr auto k = DegCT - kk - 1;
-            idx[axis] = static_cast<std::size_t>(k);
-            OutT inner{};
-            if constexpr (Level > 1) {
-                inner = horner_nd_impl<Level - 1, Dim, DegCT, OutT>(x, coeffs, idx, deg_rt);
-            } else {
-                // fetch the coefficient vector for these indices
-                detail::unroll_loop<inner.size()>([&]<std::size_t d>() {
-                    inner[d] = ([&]<std::size_t... Is>(std::index_sequence<Is...>) { return coeffs(idx[Is]..., d); })(
-                        std::make_index_sequence<Dim>{});
-                });
-            }
-            detail::unroll_loop<res.size()>([&]<std::size_t d>() {
-                // accumulate the result for this axis
-                res[d] = res[d] * x[axis] + inner[d];
+    OutT res{}; // zero-init
+
+    /* ---------- descend k = 0 … deg-1 (highest → lowest power) ---------- */
+    for (int k = 0; k < deg; ++k) {
+        idx[axis] = static_cast<std::size_t>(k);
+
+        OutT inner{};
+        if constexpr (Level > 1) {
+            inner = horner_nd_impl<Level - 1, Dim, DegCT, OutT>(x, coeffs, idx, deg_rt);
+        } else {
+            //  last spatial level → read the coefficient vector
+            detail::unroll_loop<OUT>([&]<std::size_t d>() {
+                inner[d] = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+                    return coeffs(idx[Is]..., d); // Dim indices + output
+                }(std::make_index_sequence<Dim>{});
             });
         }
-    } else {
-        for (int k = deg - 1; k >= 0; --k) {
-            idx[axis] = static_cast<std::size_t>(k);
 
-            OutT inner{};
-            if constexpr (Level > 1) {
-                inner = horner_nd_impl<Level - 1, Dim, DegCT, OutT>(x, coeffs, idx, deg_rt);
-            } else {
-                // fetch the coefficient vector for these indices
-                for (std::size_t d = 0; d < inner.size(); ++d) {
-                    inner[d] = ([&]<std::size_t... Is>(std::index_sequence<Is...>) { return coeffs(idx[Is]..., d); })(
-                        std::make_index_sequence<Dim>{});
-                }
-            }
-
-            detail::unroll_loop<res.size()>([&]<std::size_t d>() {
-                // accumulate the result for this axis
-                res[d] = res[d] * x[axis] + inner[d];
-            });
-        }
+        /* ---------- Horner accumulate along this axis ---------- */
+        detail::unroll_loop<OUT>([&]<std::size_t d>() { res[d] = res[d] * x[axis] + inner[d]; });
     }
     return res;
 }
-
 } // namespace detail
 // ------------- front‑ends (explicit & deduced Rank) ---------
 
