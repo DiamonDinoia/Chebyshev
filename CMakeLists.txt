@@ -124,13 +124,13 @@ CPMAddPackage(
         GIT_TAG 3.4.0
         DOWNLOAD_ONLY YES
 )
-if(Eigen_ADDED)
+if (Eigen_ADDED)
     add_library(Eigen INTERFACE IMPORTED)
     target_include_directories(Eigen INTERFACE ${Eigen_SOURCE_DIR})
-endif()
+endif ()
 
 add_executable(funcND funcND.cpp)
 target_compile_features(funcND PRIVATE cxx_std_20)
-target_compile_options(funcND PRIVATE -march=native)
+target_compile_options(funcND PRIVATE -march=native -ftree-vectorize)
 target_link_libraries(funcND PRIVATE cheb Eigen)
 

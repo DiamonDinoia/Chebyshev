@@ -356,7 +356,7 @@ ALWAYS_INLINE constexpr OutT horner_nd_impl(const InVec &x, const Mdspan &coeffs
         }
 
         /* ---------- Horner accumulate along this axis ---------- */
-        detail::unroll_loop<OUT>([&]<std::size_t d>() { res[d] = res[d] * x[axis] + inner[d]; });
+        detail::unroll_loop<OUT>([&]<std::size_t d>() { res[d] = std::fma(res[d], x[axis], inner[d]); });
     }
     return res;
 }
