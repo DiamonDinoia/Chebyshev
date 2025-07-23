@@ -1,4 +1,3 @@
-#include <Eigen/Dense>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -15,96 +14,80 @@
 namespace stdex = std::experimental;
 using namespace poly_eval;
 
-template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_time = 1> class FuncEvalND {
+template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class FuncEvalND {
   public:
-    using InputArg0 = typename function_traits<Func>::arg0_type;
-    using InputType = std::remove_cvref_t<InputArg0>;
-    using OutputType = typename function_traits<Func>::result_type;
-    using CoeffType = typename OutputType::value_type;
+    using Input0 = typename poly_eval::function_traits<Func>::arg0_type;
+    using InputType = std::remove_cvref_t<Input0>;
+    using OutputType = typename poly_eval::function_traits<Func>::result_type;
+    using Scalar = typename OutputType::value_type;
 
     static constexpr std::size_t dim_ = std::tuple_size_v<InputType>;
     static constexpr std::size_t outDim_ = std::tuple_size_v<OutputType>;
 
-    static constexpr std::size_t kDegreeCompileTime = N_compile_time;
-    static constexpr std::size_t kItersCompileTime = Iters_compile_time;
-
-    // Compile‑time degree constructor
-    template <std::size_t C = N_compile_time, typename = std::enable_if_t<(C != 0)>>
+    /*----- constructors ----------------------------------------------------*/
+    template <std::size_t C = N_compile, typename = std::enable_if_t<(C != 0)>>
     constexpr FuncEvalND(Func f, const InputType &a, const InputType &b) : func_(f), degree_(static_cast<int>(C)) {
         compute_scaling(a, b);
         initialize(static_cast<int>(C));
     }
 
-    // Run‑time degree constructor
-    template <std::size_t C = N_compile_time, typename = std::enable_if_t<(C == 0)>>
+    template <std::size_t C = N_compile, typename = std::enable_if_t<(C == 0)>>
     constexpr FuncEvalND(Func f, int n, const InputType &a, const InputType &b) : func_(f), degree_(n) {
         compute_scaling(a, b);
         initialize(n);
     }
 
+    /*----- call ------------------------------------------------------------*/
     OutputType operator()(const InputType &x) const {
-        return horner<N_compile_time, OutputType>(map_from_domain(x), coeffs_md_, degree_);
+        return poly_eval::horner<N_compile, OutputType>(map_from_domain(x), coeffs_md_, degree_);
     }
 
   private:
-    /* ---------- data ---------- */
+    /*----- types -----------------------------------------------------------*/
+    using extents_t = stdex::dextents<std::size_t, dim_ + 1>;
+    using mdspan_t = stdex::mdspan<Scalar, extents_t, stdex::layout_left>;
+
+    /*----- data ------------------------------------------------------------*/
     Func func_;
     const int degree_;
-    InputType low_, hi_;
-
-    std::vector<CoeffType> coeffs_flat_;
-    using extents_t = stdex::dextents<std::size_t, dim_ + 1>;
-    using mdspan_t = stdex::mdspan<CoeffType, extents_t, stdex::layout_left>;
-    using mapping_t = typename mdspan_t::mapping_type;
-    using MatrixType = Eigen::Matrix<CoeffType, Eigen::Dynamic, Eigen::Dynamic>;
-
-    mapping_t mapping_;
+    InputType low_{}, hi_{};
+    std::vector<Scalar> coeffs_flat_;
     mdspan_t coeffs_md_;
 
-    /* ---------- helpers ---------- */
-    template <std::size_t... Is> static constexpr extents_t make_extents(int n, std::index_sequence<Is...>) {
-        return extents_t{((void)Is, std::size_t(Is < dim_ ? n : outDim_))...};
+    /*----- helpers ---------------------------------------------------------*/
+    template <std::size_t... Is> static constexpr extents_t make_ext(int n, std::index_sequence<Is...>) {
+        return extents_t((Is < dim_ ? std::size_t(n) : std::size_t(outDim_))...);
     }
-    static constexpr extents_t make_extents(int n) { return make_extents(n, std::make_index_sequence<dim_ + 1>{}); }
+    static constexpr extents_t make_ext(int n) { return make_ext(n, std::make_index_sequence<dim_ + 1>{}); }
 
+    /*----------- init: sample, invert Vandermonde, re-order ----------------*/
     void initialize(int n) {
-        /* ---------- storage ---------- */
-        extents_t ext = make_extents(n); // (n,…,n,outDim_)
-        coeffs_flat_.resize(mdspan_t(nullptr, ext).mapping().required_span_size());
-        coeffs_md_ = mdspan_t(coeffs_flat_.data(), ext);
-        mapping_ = coeffs_md_.mapping(); // keep a copy
+        /* storage */
+        coeffs_flat_.resize(mdspan_t(nullptr, make_ext(n)).mapping().required_span_size());
+        coeffs_md_ = mdspan_t(coeffs_flat_.data(), make_ext(n));
 
-        using Scalar = CoeffType; // float in your test
-
-        /* ---------- Chebyshev-like nodes and Vandermonde ---------- */
-        constexpr Scalar pi = 3.14159265358979323846f;
-        std::vector<Scalar> nodes(n);
+        /* Chebyshev-like nodes */
+        constexpr Scalar pi = 3.14159265358979323846;
+        Buffer<Scalar, N_compile> nodes{};
+        if constexpr (!N_compile)
+            nodes.resize(n);
         for (int i = 0; i < n; ++i)
-            nodes[i] = std::cos(pi * (i + 0.5f) / Scalar(n));
+            nodes[i] = std::cos(pi * (i + .5) / Scalar(n));
 
-        Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic> V(n, n);
-        for (int i = 0; i < n; ++i) {
-            V(i, 0) = Scalar(1);
-            for (int j = 1; j < n; ++j)
-                V(i, j) = V(i, j - 1) * nodes[i];
-        }
-        Eigen::PartialPivLU<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic>> V_lu(V);
-
-        /* ---------- helpers ---------- */
+        /* index → linear offset helper */
         std::array<int, dim_> idx{};
-
         auto offset = [&](std::size_t k) {
-            return [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-                return mapping_(static_cast<std::size_t>(idx[Is])..., k); // dim_ indices + output axis
+            return [&]<std::size_t... I>(std::index_sequence<I...>) {
+                return coeffs_md_.mapping()(static_cast<std::size_t>(idx[I])..., k);
             }(std::make_index_sequence<dim_>{});
         };
 
-        /* ---------- sample f on full grid ---------- */
-        auto sample_rec = [&](auto &&self, std::size_t axis) -> void {
+        /* sample func on full tensor grid */
+        auto sample = [&](auto &&self, std::size_t axis) -> void {
             if (axis == dim_) {
                 InputType x{};
                 for (std::size_t d = 0; d < dim_; ++d)
-                    x[d] = nodes[idx[d]]; // map to Chebyshev-like nodes
+                    x[d] = nodes[idx[d]];
                 OutputType y = func_(map_to_domain(x));
                 for (std::size_t k = 0; k < outDim_; ++k)
                     coeffs_flat_[offset(k)] = y[k];
@@ -115,22 +98,26 @@ template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_
                 self(self, axis + 1);
             }
         };
-        sample_rec(sample_rec, 0);
+        sample(sample, 0);
 
-        /* ---------- separable 1-D solves ---------- */
-        Eigen::Matrix<Scalar, Eigen::Dynamic, 1> rhs(n), sol(n);
-
-        auto fibre_rec = [&](auto &&self, std::size_t axis, std::size_t depth) -> void {
-            if (depth == dim_) { // fixed all but 'axis'
+        /* invert each 1-D Vandermonde fibre with Björck–Pereyra */
+        auto fibre = [&](auto &&self, std::size_t axis, std::size_t depth) -> void {
+            if (depth == dim_) {
+                Buffer<Scalar, N_compile> rhs{};
+                if constexpr (!N_compile)
+                    rhs.resize(n);
                 for (std::size_t k = 0; k < outDim_; ++k) {
                     for (int i = 0; i < n; ++i) {
                         idx[axis] = i;
-                        rhs(i) = coeffs_flat_[offset(k)];
+                        rhs[i] = coeffs_flat_[offset(k)];
                     }
-                    sol = V_lu.solve(rhs);
+
+                    const auto alpha = detail::bjorck_pereyra<N_compile, Scalar, Scalar>(nodes, rhs);
+                    const auto mono = detail::newton_to_monomial<N_compile, Scalar, Scalar>(alpha, nodes);
+
                     for (int i = 0; i < n; ++i) {
                         idx[axis] = i;
-                        coeffs_flat_[offset(k)] = sol(i);
+                        coeffs_flat_[offset(k)] = mono[i];
                     }
                 }
                 return;
@@ -144,24 +131,20 @@ template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_
                 self(self, axis, depth + 1);
             }
         };
-
         for (std::size_t a = 0; a < dim_; ++a)
-            fibre_rec(fibre_rec, a, 0);
+            fibre(fibre, a, 0);
 
-        auto reverse_fibres = [&](std::size_t axis) {
+        /* reverse fibres (same as before) */
+        auto reverse = [&](std::size_t axis) {
             std::array<int, dim_> id{};
             auto off = [&](std::size_t k, std::size_t d) {
                 id[axis] = int(k);
-                /* build linear offset for id[0] … id[dim_-1] and output d */
-                return [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-                    return mapping_(static_cast<std::size_t>(id[Is])..., d);
+                return [&]<std::size_t... I>(std::index_sequence<I...>) {
+                    return coeffs_md_.mapping()(static_cast<std::size_t>(id[I])..., d);
                 }(std::make_index_sequence<dim_>{});
             };
-
-            /* recurse over all indices except the chosen axis */
             auto rec = [&](auto &&self, std::size_t depth) -> void {
-                if (depth == dim_) // all spatial axes fixed
-                {
+                if (depth == dim_) {
                     for (std::size_t d = 0; d < outDim_; ++d)
                         for (int k0 = 0, k1 = n - 1; k0 < k1; ++k0, --k1)
                             std::swap(coeffs_flat_[off(k0, d)], coeffs_flat_[off(k1, d)]);
@@ -178,30 +161,26 @@ template <class Func, std::size_t N_compile_time = 0, std::size_t Iters_compile_
             };
             rec(rec, 0);
         };
-
         for (std::size_t a = 0; a < dim_; ++a)
-            reverse_fibres(a);
+            reverse(a);
     }
 
-    C20CONSTEXPR InputType map_to_domain(const InputType &t) const noexcept {
+    /* affine maps domain ↔ [-1,1]^d */
+    InputType map_to_domain(const InputType &t) const noexcept {
         InputType out{};
         for (std::size_t d = 0; d < dim_; ++d)
-            out[d] = static_cast<typename InputType::value_type>(static_cast<typename InputType::value_type>(0.5) *
-                                                                 (t[d] / low_[d] + hi_[d]));
+            out[d] = Scalar(0.5) * (t[d] / low_[d] + hi_[d]);
         return out;
     }
-
-    ALWAYS_INLINE C20CONSTEXPR InputType map_from_domain(const InputType &x) const noexcept {
+    InputType map_from_domain(const InputType &x) const noexcept {
         InputType out{};
         for (std::size_t d = 0; d < dim_; ++d)
-            out[d] = static_cast<typename InputType::value_type>((typename InputType::value_type(2) * x[d] - hi_[d]) *
-                                                                 low_[d]);
+            out[d] = (Scalar(2) * x[d] - hi_[d]) * low_[d];
         return out;
     }
-
     void compute_scaling(const InputType &a, const InputType &b) noexcept {
         for (std::size_t d = 0; d < dim_; ++d) {
-            low_[d] = typename InputType::value_type(1) / (b[d] - a[d]);
+            low_[d] = Scalar(1) / (b[d] - a[d]);
             hi_[d] = b[d] + a[d];
         }
     }
@@ -214,8 +193,8 @@ int main() {
     constexpr int N = 8;
     const int Ntest = 1000;
 
-    using VecN = std::array<float, DimIn>;
-    using OutM = std::array<float, DimOut>;
+    using VecN = std::array<double, DimIn>;
+    using OutM = std::array<double, DimOut>;
 
     // --- define your function fVec on R^DimIn → R^DimOut ---
     auto fScalar = [](VecN const &x) {
@@ -229,7 +208,7 @@ int main() {
         for (size_t i = 0; i < DimOut; ++i) {
             auto xi = x;
             xi[i % DimIn] += static_cast<VecN::value_type>(i) / 2000.;
-            y[i] = static_cast<VecN::value_type>(std::pow(fScalar(xi), i+1));
+            y[i] = static_cast<VecN::value_type>(std::pow(fScalar(xi), i + 1));
         }
         return y;
     };

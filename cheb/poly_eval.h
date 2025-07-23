@@ -4,10 +4,8 @@
 #include "utils.h"
 
 #include <cassert>
-#include <cmath>
 #include <cstddef>
 #include <experimental/__p0009_bits/layout_left.hpp>
-#include <iostream>
 #include <xsimd/xsimd.hpp>
 
 namespace poly_eval {
