@@ -1,6 +1,11 @@
 // func_eval_nd.cpp – self‑contained demo of multidimensional Chebyshev
 // approximation with cache‑friendly storage order and static mdspan extents
 // when N_compile > 0
+//
+// Builds with GCC 13+, Clang 17+, MSVC 2022 17.9+
+//     c++ -std=c++23 -O3 func_eval_nd.cpp -o func_eval_nd
+//
+// ---------------------------------------------------------------------------
 
 #include <array>
 #include <chrono>
@@ -22,12 +27,15 @@ namespace stdex = std::experimental;
 #include "fast_eval.hpp" // Buffer<>, bjorck_pereyra, newton_to_monomial, poly_eval::horner
 using namespace poly_eval;
 
-// --- Helper to create static extents when N_compile > 0 ---
+// --- Helper to create static extents when N_compile > 0 --------------------
 template <std::size_t N_compile, std::size_t DimIn, std::size_t DimOut, std::size_t... Is>
 constexpr auto make_static_extents(std::index_sequence<Is...>) {
     return stdex::extents<std::size_t, ((void)Is, N_compile)..., DimOut>{};
 }
 
+/*==========================================================================*
+ *                  Generic N‑dimensional function approximator             *
+ *==========================================================================*/
 template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class FuncEvalND {
   public:
     using Input0 = typename function_traits<Func>::arg0_type;
@@ -46,9 +54,10 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
 
     using mdspan_t = stdex::mdspan<Scalar, extents_t, stdex::layout_right>;
 
+    /*---------------- Constructors ----------------*/
     template <std::size_t C = N_compile, typename = std::enable_if_t<(C != 0)>>
     constexpr FuncEvalND(Func f, const InputType &a, const InputType &b)
-        : func_(f), degree_(static_cast<int>(C)), coeffs_flat_(storage_required(C)),
+        : func_{f}, degree_{static_cast<int>(C)}, coeffs_flat_(storage_required(C)),
           coeffs_md_{coeffs_flat_.data(), extents_t{}} {
         compute_scaling(a, b);
         initialize(static_cast<int>(C));
@@ -56,22 +65,36 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
 
     template <std::size_t C = N_compile, typename = std::enable_if_t<(C == 0)>>
     constexpr FuncEvalND(Func f, int n, const InputType &a, const InputType &b)
-        : func_(f), degree_(n), coeffs_flat_(storage_required(n)), coeffs_md_{coeffs_flat_.d, extents_t{}} {
+        : func_{f}, degree_{n}, coeffs_flat_(storage_required(n)), coeffs_md_{coeffs_flat_.data(), make_ext(n)} {
         compute_scaling(a, b);
         initialize(n);
     }
 
+    /*---------------- Evaluation operator ----------------*/
     OutputType operator()(const InputType &x) const {
         return poly_eval::horner<N_compile, OutputType>(map_from_domain(x), coeffs_md_, degree_);
     }
 
   private:
+    /*-------------------- Data members -------------------*/
     Func func_;
     const int degree_;
     InputType low_{}, hi_{};
-    std::vector<Scalar> coeffs_flat_;
-    mdspan_t coeffs_md_{nullptr, extents_t{}};
+    std::vector<Scalar> coeffs_flat_; // owns the storage
+    mdspan_t coeffs_md_;              // view over the storage
 
+    /*======================================================
+     *   Helper: turn an index array + output‑dimension idx
+     *   into an lvalue reference into coeffs_md_
+     *====================================================*/
+    template <class IdxArray> [[nodiscard]] Scalar &coeff(const IdxArray &idx, std::size_t k) noexcept {
+        return // expand idx[...] into mdspan::operator()
+            [&]<std::size_t... I>(std::index_sequence<I...>) -> Scalar & {
+                return coeffs_md_(static_cast<std::size_t>(idx[I])..., k);
+            }(std::make_index_sequence<dim_>{});
+    }
+
+    /*-------------------- Extent helpers -----------------*/
     static extents_t make_ext(int n) {
         if constexpr (is_static) {
             return make_static_extents<N_compile, dim_, outDim_>(std::make_index_sequence<dim_>{});
@@ -79,36 +102,40 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
             return make_ext(n, std::make_index_sequence<dim_ + 1>{});
         }
     }
-
     template <std::size_t... Is> static extents_t make_ext(int n, std::index_sequence<Is...>) {
-        return extents_t((Is < dim_ ? std::size_t(n) : std::size_t(outDim_))...);
+        return extents_t{(Is < dim_ ? std::size_t(n) : std::size_t(outDim_))...};
     }
 
-    static constexpr auto storage_required(int n) {
+    static constexpr std::size_t storage_required(int n) {
         auto ext = make_ext(n);
-        auto mapping = typename mdspan_t::mapping_type(ext);
+        auto mapping = typename mdspan_t::mapping_type{ext};
         return mapping.required_span_size();
     }
 
+    /*-------------------- Initialisation -----------------*/
     void initialize(int n) {
         constexpr Scalar pi = 3.14159265358979323846;
+
         Buffer<Scalar, N_compile> nodes{};
         if constexpr (!N_compile)
             nodes.resize(n);
         for (int i = 0; i < n; ++i)
-            nodes[i] = std::cos(pi * (i + .5) / Scalar(n));
+            nodes[i] = std::cos(pi * (i + 0.5) / Scalar(n));
 
-        std::array<int, dim_> ext_idx;
+        std::array<int, dim_> ext_idx{};
         ext_idx.fill(n);
+
+        /*---- sample f on the Chebyshev grid ----*/
         for_each_index<dim_>(ext_idx, [&](const std::array<int, dim_> &idx) {
             InputType x_dom{};
             for (std::size_t d = 0; d < dim_; ++d)
                 x_dom[d] = nodes[idx[d]];
             OutputType y = func_(map_to_domain(x_dom));
             for (std::size_t k = 0; k < outDim_; ++k)
-                coeffs_flat_[offset(coeffs_md_.mapping(), idx, k)] = y[k];
+                coeff(idx, k) = y[k];
         });
 
+        /*---- convert along each axis: Newton → monomial ----*/
         Buffer<Scalar, N_compile> rhs{}, alpha{}, mono{};
         if constexpr (!N_compile) {
             rhs.resize(n);
@@ -125,19 +152,20 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
                     for (int i = 0; i < n; ++i) {
                         base_idx = base;
                         base_idx[axis] = i;
-                        rhs[i] = coeffs_flat_[offset(coeffs_md_.mapping(), base_idx, k)];
+                        rhs[i] = coeff(base_idx, k);
                     }
                     alpha = detail::bjorck_pereyra<N_compile, Scalar, Scalar>(nodes, rhs);
                     mono = detail::newton_to_monomial<N_compile, Scalar, Scalar>(alpha, nodes);
                     for (int i = 0; i < n; ++i) {
                         base_idx = base;
                         base_idx[axis] = i;
-                        coeffs_flat_[offset(coeffs_md_.mapping(), base_idx, k)] = mono[i];
+                        coeff(base_idx, k) = mono[i];
                     }
                 }
             });
         }
 
+        /*---- reverse coefficient order in each axis ----*/
         for (std::size_t axis = 0; axis < dim_; ++axis) {
             auto inner_ext = ext_idx;
             inner_ext[axis] = 1;
@@ -147,10 +175,10 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
                     while (i < j) {
                         base_idx = base;
                         base_idx[axis] = i;
-                        auto off_i = offset(coeffs_md_.mapping(), base_idx, k);
+                        auto &a = coeff(base_idx, k);
                         base_idx[axis] = j;
-                        auto off_j = offset(coeffs_md_.mapping(), base_idx, k);
-                        std::swap(coeffs_flat_[off_i], coeffs_flat_[off_j]);
+                        auto &b = coeff(base_idx, k);
+                        std::swap(a, b);
                         ++i;
                         --j;
                     }
@@ -160,6 +188,7 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
     }
 
     InputType map_to_domain(const InputType &t) const noexcept {
+        // t ∈ [‑1,1] → x ∈ [a,b]
         InputType out{};
         for (std::size_t d = 0; d < dim_; ++d)
             out[d] = Scalar(0.5) * (t[d] / low_[d] + hi_[d]);
@@ -167,6 +196,7 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
     }
 
     InputType map_from_domain(const InputType &x) const noexcept {
+        // x ∈ [a,b] → t ∈ [‑1,1]
         InputType out{};
         for (std::size_t d = 0; d < dim_; ++d)
             out[d] = (Scalar(2) * x[d] - hi_[d]) * low_[d];
@@ -180,8 +210,8 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
         }
     }
 
-    // Iterate over a rectangular integer domain ext[0]×…×ext[R-1]
-    template <std::size_t Rank, class F> void for_each_index(const std::array<int, Rank> &ext, F &&body) {
+    /*--------------------- Utilities ---------------------*/
+    template <std::size_t Rank, class F> static void for_each_index(const std::array<int, Rank> &ext, F &&body) {
         std::array<int, Rank> idx{};
         while (true) {
             body(idx);
@@ -194,26 +224,19 @@ template <class Func, std::size_t N_compile = 0, std::size_t Iters_CT = 1> class
             }
         }
     }
-
-    // Map logical index → flat offset for an mdspan mapping.
-    template <class Mapping, std::size_t Rminus1 = Mapping::extents_type::rank() - 1>
-    std::size_t offset(const Mapping &map, const std::array<int, Rminus1> &idx, std::size_t last = 0) {
-        return [&]<std::size_t... I>(std::index_sequence<I...>) {
-            return map(static_cast<std::size_t>(idx[I])..., last);
-        }(std::make_index_sequence<Rminus1>{});
-    }
 };
 
-/* ------------------------------------------------------------------------
- * Demo / benchmark                                                        */
+/*---------------------------------------------------------------------------*
+ *                        Demo / micro‑benchmark                             *
+ *---------------------------------------------------------------------------*/
 int main() {
     constexpr std::size_t DimIn = 4;
-    constexpr std::size_t DimOut =4;
+    constexpr std::size_t DimOut = 4;
     constexpr int N = 8;    // polynomial degree
     const int Ntest = 1000; // evaluation points
 
-    using VecN = std::array<float, DimIn>;
-    using OutM = std::array<float, DimOut>;
+    using VecN = std::array<double, DimIn>;
+    using OutM = std::array<double, DimOut>;
 
     auto fScalar = [](const VecN &x) {
         double s = 0;
@@ -225,15 +248,15 @@ int main() {
         OutM y{};
         for (std::size_t i = 0; i < DimOut; ++i) {
             auto xi = x;
-            xi[i % DimIn] += static_cast<VecN::value_type>(i) / 2000.0;
+            xi[i % DimIn] += float(i) / 2000.0f;
             y[i] = std::pow(fScalar(xi), static_cast<int>(i) + 1);
         }
         return y;
     };
 
     VecN a{}, b{};
-    a.fill(-1.0);
-    b.fill(2.0);
+    a.fill(-1.0f);
+    b.fill(2.0f);
 
     auto t0 = std::chrono::high_resolution_clock::now();
     FuncEvalND<decltype(fVec), N> approx(fVec, a, b);
@@ -257,7 +280,7 @@ int main() {
     auto ta1 = std::chrono::high_resolution_clock::now();
     std::cout << "Analytical eval over " << Ntest
               << " pts: " << std::chrono::duration<double, std::milli>(ta1 - ta0).count()
-              << " ms, sumAnalytic=" << sumAnalytic << '\n';
+              << " ms, sumAnalytic = " << sumAnalytic << '\n';
 
     double sumPoly = 0.0;
     auto tp0 = std::chrono::high_resolution_clock::now();
@@ -272,8 +295,8 @@ int main() {
     }
     auto tp1 = std::chrono::high_resolution_clock::now();
     std::cout << "Polynomial eval over " << Ntest
-              << " pts: " << std::chrono::duration<double, std::milli>(tp1 - tp0).count() << " ms, sumPoly=" << sumPoly
-              << '\n';
+              << " pts: " << std::chrono::duration<double, std::milli>(tp1 - tp0).count()
+              << " ms, sumPoly = " << sumPoly << '\n';
 
     double err2 = 0.0, norm2 = 0.0;
     gen.seed(42);
@@ -289,6 +312,5 @@ int main() {
         }
     }
     std::cout << "Relative L2 error: " << std::sqrt(err2 / norm2) << '\n';
-
     return 0;
 }

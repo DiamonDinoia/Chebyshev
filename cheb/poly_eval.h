@@ -356,7 +356,24 @@ ALWAYS_INLINE constexpr OutT horner_nd_impl(const InVec &x, const Mdspan &coeffs
         }
 
         /* ---------- Horner accumulate along this axis ---------- */
-        detail::unroll_loop<OUT>([&]<std::size_t d>() { res[d] = std::fma(res[d], x[axis], inner[d]); });
+        using batch = xsimd::batch<typename OutT::value_type>;
+        constexpr std::size_t V = batch::size;
+
+        const batch x_vec(x[axis]);
+
+        detail::unroll_loop<OUT, 0, V>([&]<std::size_t d>() {
+            if constexpr (d + V <= OUT) {
+                // unroll the inner loop for full batches
+                batch r = batch::load_unaligned(res.data() + d);
+                batch in = batch::load_unaligned(inner.data() + d);
+                r = xsimd::fma(r, x_vec, in); // r = r * x + in
+                r.store_unaligned(res.data() + d);
+            } else {
+                // handle the remainder (if any)
+                detail::unroll_loop<OUT, d, 1>(
+                    [&]<std::size_t last_d>() { res[last_d] = std::fma(res[last_d], x[axis], inner[last_d]); });
+            }
+        });
     }
     return res;
 }
