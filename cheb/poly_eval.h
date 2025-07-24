@@ -370,8 +370,9 @@ ALWAYS_INLINE constexpr OutT horner_nd_impl(const InVec &x, const Mdspan &coeffs
                 r.store_unaligned(res.data() + d);
             } else {
                 // handle the remainder (if any)
-                detail::unroll_loop<OUT, d, 1>(
-                    [&]<std::size_t last_d>() { res[last_d] = std::fma(res[last_d], x[axis], inner[last_d]); });
+                detail::unroll_loop<OUT, d, 1>([&]<std::size_t last_d>() {
+                    res[last_d] = xsimd::fma(res[last_d], typename OutT::value_type(x[axis]), inner[last_d]);
+                });
             }
         });
     }
