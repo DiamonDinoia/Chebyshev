@@ -120,7 +120,8 @@ ALWAYS_INLINE void constexpr FuncEval<Func, N_compile_time, Iters_compile_time>:
         // print alignment;
         ASSUME(unaligned_points < scalar_unroll); // tells the compiler that this loop is at most alignment
         // process scalar until we reach the first aligned point
-        detail::unroll_loop<scalar_unroll>([&]<const auto i>() {
+        detail::unroll_loop<scalar_unroll>([&](const auto J) {
+            constexpr auto i = decltype(J)::value;
             if (i < unaligned_points) {
                 out[i] = operator()(pts[i]);
             }
