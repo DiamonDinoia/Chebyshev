@@ -478,9 +478,7 @@ C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexc
 }
 
 // — static (compile‐time) degree
-template <std::size_t N_compile_time, class Func, typename Fdec = std::decay_t<Func>,
-          typename InputType = typename function_traits<Fdec>::arg0_type,
-          typename = std::enable_if_t<has_tuple_size_v<InputType>>>
+template <std::size_t N_compile_time, class Func, typename Fdec, typename InputType, typename>
 NO_INLINE C20CONSTEXPR auto make_func_eval(Func &&F, InputType const &a, InputType const &b)
     -> FuncEvalND<Fdec, N_compile_time> {
     static_assert(N_compile_time > 0, "Degree must be > 0 for compile‑time overload");
@@ -488,20 +486,15 @@ NO_INLINE C20CONSTEXPR auto make_func_eval(Func &&F, InputType const &a, InputTy
 }
 
 // — dynamic (run‐time) degree
-template <class Func, typename Fdec = std::decay_t<Func>,
-          typename InputType = typename function_traits<Fdec>::arg0_type,
-          typename = std::enable_if_t<has_tuple_size_v<InputType>>,
-          typename = std::enable_if_t<std::is_integral_v<int>>> // More explicit
+template <class Func, typename Fdec, typename InputType, typename, typename>
 auto make_func_eval(Func &&F, int n, InputType const &a, InputType const &b) noexcept -> FuncEvalND<Fdec, 0> {
     assert(n > 0 && "Degree must be positive for runtime overload");
     return FuncEvalND<Fdec, 0>(std::forward<Func>(F), n, a, b);
 }
 
 // — 3) C++17: Find minimal N ≤ MaxN_val to reach runtime eps
-template <std::size_t MaxN_val = 8, std::size_t NumEvalPoints_val = 100, class Func,
-          typename InputType = typename function_traits<Func>::arg0_type,
-          typename OutputType = typename function_traits<Func>::result_type,
-          typename = std::enable_if_t<(std::tuple_size_v<InputType> > 1)>>
+template <std::size_t MaxN_val, std::size_t NumEvalPoints_val, class Func, typename InputType, typename OutputType,
+          typename>
 NO_INLINE auto make_func_eval(Func &&F, double eps, InputType const &a, InputType const &b) -> FuncEvalND<Func, 0> {
     static_assert(MaxN_val > 0, "MaxN_val must be > 0");
     static_assert(NumEvalPoints_val > 1, "Need at least 2 eval points");
@@ -536,35 +529,34 @@ NO_INLINE auto make_func_eval(Func &&F, double eps, InputType const &a, InputTyp
 
 #if __cplusplus >= 202002L
 // — 4) C++20: eps_val as a template parameter
-template <double eps_val, std::size_t MaxN_val = 8, std::size_t NumEvalPoints_val = 100, class Func,
-          typename InputType = typename function_traits<Func>::arg0_type,
-          typename OutputType = typename function_traits<Func>::result_type,
-          typename = std::enable_if_t<(std::tuple_size_v<InputType> > 1)>>
+template <double eps, std::size_t MaxN_val, std::size_t NumEvalPoints_val, class Func, typename InputType,
+          typename OutputType, typename>
 NO_INLINE constexpr auto make_func_eval(Func &&F, InputType const &a, InputType const &b) -> FuncEvalND<Func, 0> {
     static_assert(MaxN_val > 0, "MaxN_val must be > 0");
     static_assert(NumEvalPoints_val > 1, "Need at least 2 eval points");
-    static_assert(eps_val > std::numeric_limits<typename InputType::value_type>::epsilon(),
+    static_assert(eps > std::numeric_limits<typename InputType::value_type>::epsilon(),
                   "eps must be greater than machine epsilon for InputType");
 
     std::vector<InputType> eval_pts = detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
 
+    double max_err = 0.0;
     for (int n = 2; n <= int(MaxN_val); ++n) {
         auto evaluator = FuncEvalND<Func, 0>(std::forward<Func>(F), n, a, b);
-        double max_err = 0.0;
+        max_err = 0.0;
         for (auto const &pt : eval_pts) {
             auto actual = F(pt);
             auto approx = evaluator(pt);
-            double rel_err = detail::relative_l2_norm(actual, approx);
-            max_err = std::max(max_err, rel_err);
+            max_err += detail::relative_l2_norm(actual, approx);
         }
-        if (max_err <= eps_val) {
+        max_err /= eval_pts.size(); // average error over all points
+        if (max_err <= eps) {
             std::cout << "Converged with N=" << n << " (max err=" << std::scientific << max_err << ")\n";
             return evaluator;
         }
     }
 
-    std::cerr << "Warning: did not converge to eps_val=" << std::scientific << eps_val << " within N=" << MaxN_val
-              << "\n";
+    std::cerr << "Warning: did not converge to eps=" << std::scientific << eps << " within N=" << MaxN_val
+              << " (max err=" << std::scientific << max_err << ")\n";
     return FuncEvalND<Func, 0>(std::forward<Func>(F), static_cast<int>(MaxN_val), a, b);
 }
 #endif

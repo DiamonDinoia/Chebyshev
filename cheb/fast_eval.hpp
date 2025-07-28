@@ -315,6 +315,36 @@ constexpr auto make_func_eval(Func F, InputType a, InputType b);
 template <typename... EvalTypes, typename = std::enable_if_t<(is_func_eval<std::decay_t<EvalTypes>>::value && ...)>>
 C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept;
 
+
+// Static (compile-time) degree, multidimensional
+template <std::size_t N_compile_time, class Func, typename Fdec = std::decay_t<Func>,
+          typename InputType = typename function_traits<Fdec>::arg0_type,
+          typename = std::enable_if_t<has_tuple_size_v<InputType>>>
+NO_INLINE C20CONSTEXPR auto make_func_eval(Func &&F, InputType const &a, InputType const &b)
+    -> FuncEvalND<Fdec, N_compile_time>;
+
+// Dynamic (run-time) degree, multidimensional
+template <class Func, typename Fdec = std::decay_t<Func>,
+          typename InputType = typename function_traits<Fdec>::arg0_type,
+          typename = std::enable_if_t<has_tuple_size_v<InputType>>,
+          typename = std::enable_if_t<std::is_integral_v<int>>>
+auto make_func_eval(Func &&F, int n, InputType const &a, InputType const &b) noexcept -> FuncEvalND<Fdec, 0>;
+
+// C++17: Find minimal N ≤ MaxN_val to reach runtime eps, multidimensional
+template <std::size_t MaxN_val, std::size_t NumEvalPoints_val, class Func,
+          typename InputType = typename function_traits<Func>::arg0_type,
+          typename OutputType = typename function_traits<Func>::result_type,
+          typename = std::enable_if_t<(std::tuple_size_v<InputType> > 1)>>
+NO_INLINE auto make_func_eval(Func &&F, double eps, InputType const &a, InputType const &b) -> FuncEvalND<Func, 0>;
+
+#if __cplusplus >= 202002L
+// C++20: eps_val as a template parameter, multidimensional
+template <double eps_val, std::size_t MaxN_val = 8, std::size_t NumEvalPoints_val = 100, class Func,
+          typename InputType = typename function_traits<Func>::arg0_type,
+          typename OutputType = typename function_traits<Func>::result_type,
+          typename = std::enable_if_t<(std::tuple_size_v<InputType> > 1)>>
+NO_INLINE constexpr auto make_func_eval(Func &&F, InputType const &a, InputType const &b) -> FuncEvalND<Func, 0>;
+#endif
 } // namespace poly_eval
 
 // Include implementations
