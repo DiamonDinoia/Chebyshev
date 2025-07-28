@@ -13,12 +13,9 @@
 #include <functional>
 #include <iostream>
 #include <random>
-#include <utility>
-#include <vector>
 
 #include "fast_eval.hpp" // Buffer<>, bjorck_pereyra, newton_to_monomial, poly_eval::horner
 using namespace poly_eval;
-
 
 /*---------------------------------------------------------------------------*
  *                        Demo / micro‑benchmark                             *
@@ -26,8 +23,9 @@ using namespace poly_eval;
 int main() {
     constexpr std::size_t DimIn = 4;
     constexpr std::size_t DimOut = 4;
-    constexpr int N = 8;    // polynomial degree
-    const int Ntest = 1000; // evaluation points
+    constexpr int N = 8;         // polynomial degree
+    constexpr double eps = 1e-2; // error tolerance
+    const int Ntest = 1000;      // evaluation points
 
     using VecN = std::array<double, DimIn>;
     using OutM = std::array<double, DimOut>;
@@ -50,10 +48,10 @@ int main() {
 
     VecN a{}, b{};
     a.fill(-1.0f);
-    b.fill(2.0f);
+    b.fill(0.5f);
 
     auto t0 = std::chrono::high_resolution_clock::now();
-    FuncEvalND<decltype(fVec)> approx(fVec, N, a, b);
+    const auto approx = poly_eval::make_func_eval<eps>(fVec, a, b);
     auto t1 = std::chrono::high_resolution_clock::now();
     std::cout << "Init: " << std::chrono::duration<double, std::milli>(t1 - t0).count() << " ms\n";
 
@@ -92,19 +90,15 @@ int main() {
               << " pts: " << std::chrono::duration<double, std::milli>(tp1 - tp0).count()
               << " ms, sumPoly = " << sumPoly << '\n';
 
-    double err2 = 0.0, norm2 = 0.0;
+    double relnorm2 = 0.0;
     gen.seed(42);
     for (int i = 0; i < Ntest; ++i) {
         VecN x;
         for (auto &xi : x)
             xi = dist(gen);
         auto vE = fVec(x), vP = approx(x);
-        for (std::size_t d = 0; d < DimOut; ++d) {
-            double e = vE[d] - vP[d];
-            err2 += e * e;
-            norm2 += vE[d] * vE[d];
-        }
+        relnorm2 += detail::relative_l2_norm(vP, vE);
     }
-    std::cout << "Relative L2 error: " << std::sqrt(err2 / norm2) << '\n';
+    std::cout << "Mean Relative norm 2: " << relnorm2 / double(Ntest) << '\n';
     return 0;
 }

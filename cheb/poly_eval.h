@@ -319,7 +319,7 @@ ALWAYS_INLINE constexpr OutT horner_nd_impl(const InVec &x, const Mdspan &coeffs
 
     for (int k = 0; k < deg; ++k) {
         idx[axis] = static_cast<std::size_t>(k);
-        OutT inner{};
+        alignas(batch::arch_type::alignment()) OutT inner{};
         if constexpr (Level > 1) {
             inner = horner_nd_impl<Level - 1, Dim, DegCT, OutT>(x, coeffs, idx, deg_rt);
         } else {

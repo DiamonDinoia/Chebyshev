@@ -11,21 +11,7 @@
 
 namespace poly_eval {
 
-namespace detail {
-template <typename T> std::vector<T> linspace(const T start, const T end, const int num_points) {
-    std::vector<T> points(num_points);
-    if (num_points <= 1) {
-        if (num_points == 1)
-            points[0] = start;
-        return points;
-    }
-    T step = (end - start) / static_cast<T>(num_points - 1);
-    for (int i = 0; i < num_points; ++i) {
-        points[i] = start + static_cast<T>(i) * step;
-    }
-    return points;
-}
-} // namespace detail
+namespace detail {} // namespace detail
 
 // -----------------------------------------------------------------------------
 // FuncEval Implementation (Runtime)
@@ -212,6 +198,181 @@ FuncEval<Func, N_compile_time, Iters_compile_time>::refine(const Buffer<InputTyp
     std::reverse(monomials.begin(), monomials.end());
 }
 
+// Constructor for static degree
+
+template <class Func, std::size_t N_compile>
+template <std::size_t C, typename>
+constexpr FuncEvalND<Func, N_compile>::FuncEvalND(Func f, const InputType &a, const InputType &b)
+    : func_{f}, degree_{static_cast<int>(N_compile)}, coeffs_flat_(), coeffs_md_{coeffs_flat_.data(), extents_t{}} {
+    compute_scaling(a, b);
+    initialize(static_cast<int>(N_compile));
+}
+
+// Constructor for dynamic degree
+template <class Func, std::size_t N_compile>
+template <std::size_t C, typename>
+constexpr FuncEvalND<Func, N_compile>::FuncEvalND(Func f, int n, const InputType &a, const InputType &b)
+    : func_{f}, degree_{n}, coeffs_flat_(storage_required(n)), coeffs_md_{coeffs_flat_.data(), make_ext(n)} {
+    compute_scaling(a, b);
+    initialize(n);
+}
+
+// Evaluate via Horner's method
+template <class Func, std::size_t N_compile>
+typename FuncEvalND<Func, N_compile>::OutputType FuncEvalND<Func, N_compile>::operator()(const InputType &x) const {
+    return poly_eval::horner<N_compile, OutputType>(map_from_domain(x), coeffs_md_, degree_);
+}
+
+// coeff_impl
+template <class Func, std::size_t N_compile>
+template <typename IdxArray, std::size_t... I>
+typename FuncEvalND<Func, N_compile>::Scalar &
+FuncEvalND<Func, N_compile>::coeff_impl(const IdxArray &idx, std::size_t k, std::index_sequence<I...>) noexcept {
+    return coeffs_md_(static_cast<std::size_t>(idx[I])..., k);
+}
+
+template <class Func, std::size_t N_compile>
+template <class IdxArray>
+[[nodiscard]] typename FuncEvalND<Func, N_compile>::Scalar &FuncEvalND<Func, N_compile>::coeff(const IdxArray &idx,
+                                                                                               std::size_t k) noexcept {
+    return coeff_impl<IdxArray>(idx, k, std::make_index_sequence<dim_>{});
+}
+
+template <class Func, std::size_t N_compile> auto FuncEvalND<Func, N_compile>::make_ext(int n) noexcept -> extents_t {
+    if constexpr (is_static) {
+        return detail::make_static_extents<N_compile, dim_, outDim_>(std::make_index_sequence<dim_>{});
+    } else {
+        return make_ext(n, std::make_index_sequence<dim_ + 1>{});
+    }
+}
+
+template <class Func, std::size_t N_compile>
+template <std::size_t... Is>
+auto FuncEvalND<Func, N_compile>::make_ext(int n, std::index_sequence<Is...>) noexcept -> extents_t {
+    return extents_t{(Is < dim_ ? static_cast<std::size_t>(n) : static_cast<std::size_t>(outDim_))...};
+}
+
+template <class Func, std::size_t N_compile>
+constexpr std::size_t FuncEvalND<Func, N_compile>::storage_required(const int n) noexcept {
+    auto ext = make_ext(n);
+    auto mapping = typename mdspan_t::mapping_type{ext};
+    return mapping.required_span_size();
+}
+
+template <class Func, std::size_t N_compile> constexpr void FuncEvalND<Func, N_compile>::initialize(int n) {
+    Buffer<Scalar, N_compile> nodes{};
+    if constexpr (!N_compile)
+        nodes.resize(n);
+    for (int k = 0; k < n; ++k)
+        nodes[k] = detail::cos((2.0 * double(k) + 1.0) * M_PI / (2.0 * n));
+
+    std::array<int, dim_> ext_idx{};
+    ext_idx.fill(n);
+
+    // sample f on Chebyshev grid
+    for_each_index<dim_>(ext_idx, [&](const std::array<int, dim_> &idx) {
+        InputType x_dom{};
+        for (std::size_t d = 0; d < dim_; ++d)
+            x_dom[d] = nodes[idx[d]];
+        OutputType y = func_(map_to_domain(x_dom));
+        for (std::size_t k = 0; k < outDim_; ++k)
+            coeff(idx, k) = y[k];
+    });
+
+    // convert Newton → monomial along each axis
+    Buffer<Scalar, N_compile> rhs{}, alpha{}, mono{};
+    if constexpr (!N_compile) {
+        rhs.resize(n);
+        alpha.resize(n);
+        mono.resize(n);
+    }
+
+    std::array<int, dim_> base_idx{};
+    for (std::size_t axis = 0; axis < dim_; ++axis) {
+        auto inner_ext = ext_idx;
+        inner_ext[axis] = 1;
+        for_each_index<dim_>(inner_ext, [&](const std::array<int, dim_> &base) {
+            for (std::size_t k = 0; k < outDim_; ++k) {
+                for (int i = 0; i < n; ++i) {
+                    base_idx = base;
+                    base_idx[axis] = i;
+                    rhs[i] = coeff(base_idx, k);
+                }
+                alpha = detail::bjorck_pereyra<N_compile, Scalar, Scalar>(nodes, rhs);
+                mono = detail::newton_to_monomial<N_compile, Scalar, Scalar>(alpha, nodes);
+                for (int i = 0; i < n; ++i) {
+                    base_idx = base;
+                    base_idx[axis] = i;
+                    coeff(base_idx, k) = mono[i];
+                }
+            }
+        });
+    }
+
+    // reverse coefficient order
+    for (std::size_t axis = 0; axis < dim_; ++axis) {
+        auto inner_ext = ext_idx;
+        inner_ext[axis] = 1;
+        for_each_index<dim_>(inner_ext, [&](const std::array<int, dim_> &base) {
+            for (std::size_t k = 0; k < outDim_; ++k) {
+                int i = 0, j = n - 1;
+                while (i < j) {
+                    base_idx = base;
+                    base_idx[axis] = i;
+                    auto &a = coeff(base_idx, k);
+                    base_idx[axis] = j;
+                    auto &b = coeff(base_idx, k);
+                    std::swap(a, b);
+                    ++i;
+                    --j;
+                }
+            }
+        });
+    }
+}
+
+template <class Func, std::size_t N_compile>
+[[nodiscard]] constexpr typename FuncEvalND<Func, N_compile>::InputType
+FuncEvalND<Func, N_compile>::map_to_domain(const InputType &t) const noexcept {
+    InputType out{};
+    for (std::size_t d = 0; d < dim_; ++d)
+        out[d] = Scalar(0.5) * (t[d] / low_[d] + hi_[d]);
+    return out;
+}
+
+template <class Func, std::size_t N_compile>
+[[nodiscard]] constexpr typename FuncEvalND<Func, N_compile>::InputType
+FuncEvalND<Func, N_compile>::map_from_domain(const InputType &x) const noexcept {
+    InputType out{};
+    for (std::size_t d = 0; d < dim_; ++d)
+        out[d] = (Scalar(2) * x[d] - hi_[d]) * low_[d];
+    return out;
+}
+
+template <class Func, std::size_t N_compile>
+constexpr void FuncEvalND<Func, N_compile>::compute_scaling(const InputType &a, const InputType &b) noexcept {
+    for (std::size_t d = 0; d < dim_; ++d) {
+        low_[d] = Scalar(1) / (b[d] - a[d]);
+        hi_[d] = b[d] + a[d];
+    }
+}
+
+template <class Func, std::size_t N_compile>
+template <std::size_t Rank, class F>
+void FuncEvalND<Func, N_compile>::for_each_index(const std::array<int, Rank> &ext, F &&body) {
+    std::array<int, Rank> idx{};
+    while (true) {
+        body(idx);
+        for (std::size_t d = 0; d < Rank; ++d) {
+            if (++idx[d] < ext[d])
+                break;
+            if (d == Rank - 1)
+                return;
+            idx[d] = 0;
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // make_func_eval API implementations (Runtime, C++17 compatible)
 // -----------------------------------------------------------------------------
@@ -241,29 +402,11 @@ NO_INLINE C20CONSTEXPR auto make_func_eval(Func F, double eps, // eps as a runti
     static_assert(MaxN_val > 0, "Max polynomial degree must be positive.");
     static_assert(NumEvalPoints_val > 1, "Number of evaluation points must be greater than 1.");
 
-    // Validate eps: cannot be less than machine precision for the output type
-    if (eps < std::numeric_limits<double>::epsilon()) {
-        if constexpr (std::is_floating_point_v<OutputType>) {
-            if (eps < std::numeric_limits<OutputType>::epsilon()) {
-                std::cerr << "Warning: Requested epsilon " << eps << " is less than machine epsilon for OutputType ("
-                          << std::numeric_limits<OutputType>::epsilon() << "). Clamping.\n";
-                eps = std::numeric_limits<OutputType>::epsilon();
-            }
-        } else if constexpr (std::is_same_v<OutputType, std::complex<float>>) {
-            if (eps < std::numeric_limits<float>::epsilon()) {
-                std::cerr << "Warning: Requested epsilon " << eps
-                          << " is less than machine epsilon for std::complex<float> ("
-                          << std::numeric_limits<float>::epsilon() << "). Clamping.\n";
-                eps = std::numeric_limits<float>::epsilon();
-            }
-        } else if constexpr (std::is_same_v<OutputType, std::complex<double>>) {
-            if (eps < std::numeric_limits<double>::epsilon()) {
-                std::cerr << "Warning: Requested epsilon " << eps
-                          << " is less than machine epsilon for std::complex<double> ("
-                          << std::numeric_limits<double>::epsilon() << "). Clamping.\n";
-                eps = std::numeric_limits<double>::epsilon();
-            }
-        }
+    // Validate eps: cannot be less than machine precision for the input type
+    if (eps < std::numeric_limits<InputType>::epsilon()) {
+        std::cerr << "Warning: Requested epsilon " << eps << " is less than machine epsilon for InputType ("
+                  << std::numeric_limits<InputType>::epsilon() << "). Clamping.\n";
+        eps = std::numeric_limits<InputType>::epsilon();
     }
 
     std::vector<InputType> eval_points = detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
@@ -274,7 +417,7 @@ NO_INLINE C20CONSTEXPR auto make_func_eval(Func F, double eps, // eps as a runti
         for (const auto &pt : eval_points) {
             const auto actual_val = F(pt);
             const auto poly_val = current_evaluator(pt);
-            const auto current_abs_error = std::abs(1.0 - double(poly_val) / double(actual_val));
+            const auto current_abs_error = detail::relative_error(poly_val, actual_val);
             if (current_abs_error > max_observed_error) {
                 max_observed_error = current_abs_error;
             }
@@ -292,14 +435,14 @@ NO_INLINE C20CONSTEXPR auto make_func_eval(Func F, double eps, // eps as a runti
 
 #if __cplusplus >= 202002L
 template <double eps_val, std::size_t MaxN_val, std::size_t NumEvalPoints_val, std::size_t Iters_compile_time,
-          class Func>
-NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::arg0_type a,
-                                        typename function_traits<Func>::arg0_type b) {
-    using InputType = typename function_traits<Func>::arg0_type;
+          class Func, typename InputType, typename>
+NO_INLINE constexpr auto make_func_eval(Func F, InputType a, InputType b) {
     using OutputType = typename function_traits<Func>::result_type;
 
     static_assert(MaxN_val > 0, "Max polynomial degree must be positive.");
     static_assert(NumEvalPoints_val > 1, "Number of evaluation points must be greater than 1.");
+    static_assert(eps_val >= std::numeric_limits<InputType>::epsilon(),
+                  "Epsilon must be at most than machine epsilon for InputType.");
 
     std::vector<InputType> eval_points = detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
 
@@ -310,7 +453,7 @@ NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::
         for (const auto &pt : eval_points) {
             OutputType actual_val = F(pt);
             OutputType poly_val = current_evaluator(pt);
-            double current_abs_error = std::abs(1.0 - poly_val / actual_val);
+            double current_abs_error = detail::relative_error(poly_val, actual_val);
             if (current_abs_error > max_observed_error) {
                 max_observed_error = current_abs_error;
             }
@@ -329,8 +472,101 @@ NO_INLINE constexpr auto make_func_eval(Func F, typename function_traits<Func>::
 }
 #endif
 
-template <typename... EvalTypes> C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept {
+template <typename... EvalTypes, typename>
+C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept {
     return FuncEvalMany<std::decay_t<EvalTypes>...>(std::forward<EvalTypes>(evals)...);
 }
+
+// — static (compile‐time) degree
+template <std::size_t N_compile_time, class Func, typename Fdec = std::decay_t<Func>,
+          typename InputType = typename function_traits<Fdec>::arg0_type,
+          typename = std::enable_if_t<has_tuple_size_v<InputType>>>
+NO_INLINE C20CONSTEXPR auto make_func_eval(Func &&F, InputType const &a, InputType const &b)
+    -> FuncEvalND<Fdec, N_compile_time> {
+    static_assert(N_compile_time > 0, "Degree must be > 0 for compile‑time overload");
+    return FuncEvalND<Fdec, N_compile_time>(std::forward<Func>(F), a, b);
+}
+
+// — dynamic (run‐time) degree
+template <class Func, typename Fdec = std::decay_t<Func>,
+          typename InputType = typename function_traits<Fdec>::arg0_type,
+          typename = std::enable_if_t<has_tuple_size_v<InputType>>,
+          typename = std::enable_if_t<std::is_integral_v<int>>> // More explicit
+auto make_func_eval(Func &&F, int n, InputType const &a, InputType const &b) noexcept -> FuncEvalND<Fdec, 0> {
+    assert(n > 0 && "Degree must be positive for runtime overload");
+    return FuncEvalND<Fdec, 0>(std::forward<Func>(F), n, a, b);
+}
+
+// — 3) C++17: Find minimal N ≤ MaxN_val to reach runtime eps
+template <std::size_t MaxN_val = 8, std::size_t NumEvalPoints_val = 100, class Func,
+          typename InputType = typename function_traits<Func>::arg0_type,
+          typename OutputType = typename function_traits<Func>::result_type,
+          typename = std::enable_if_t<(std::tuple_size_v<InputType> > 1)>>
+NO_INLINE auto make_func_eval(Func &&F, double eps, InputType const &a, InputType const &b) -> FuncEvalND<Func, 0> {
+    static_assert(MaxN_val > 0, "MaxN_val must be > 0");
+    static_assert(NumEvalPoints_val > 1, "Need at least 2 eval points");
+    // Clamp eps to machine-precision for InputType and warn if needed
+    if (eps < std::numeric_limits<typename InputType::value_type>::epsilon()) {
+        std::cerr << "Warning: Requested epsilon " << eps << " is less than machine epsilon for InputType ("
+                  << std::numeric_limits<typename InputType::value_type>::epsilon() << "). Clamping.\n";
+        eps = std::numeric_limits<typename InputType::value_type>::epsilon();
+    }
+    // generate NumEvalPoints_val linearly spaced points in [a,b]
+    std::vector<InputType> eval_pts = detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
+    double max_err = 0.0;
+    for (int n = 2; n <= int(MaxN_val); ++n) {
+        auto evaluator = FuncEvalND<Func, 0>(std::forward<Func>(F), n, a, b);
+        max_err = 0.0;
+        for (auto const &pt : eval_pts) {
+            auto actual = F(pt);
+            auto approx = evaluator(pt);
+            max_err += detail::relative_l2_norm(actual, approx);
+        }
+        max_err /= eval_pts.size(); // average error over all points
+        if (max_err <= eps) {
+            std::cout << "Converged with N=" << n << " (max err=" << std::scientific << max_err << ")\n";
+            return evaluator;
+        }
+    }
+
+    std::cerr << "Warning: did not converge to eps=" << std::scientific << eps << " within N=" << MaxN_val
+              << " (max err=" << std::scientific << max_err << ")\n";
+    return FuncEvalND<Func, 0>(std::forward<Func>(F), static_cast<int>(MaxN_val), a, b);
+}
+
+#if __cplusplus >= 202002L
+// — 4) C++20: eps_val as a template parameter
+template <double eps_val, std::size_t MaxN_val = 8, std::size_t NumEvalPoints_val = 100, class Func,
+          typename InputType = typename function_traits<Func>::arg0_type,
+          typename OutputType = typename function_traits<Func>::result_type,
+          typename = std::enable_if_t<(std::tuple_size_v<InputType> > 1)>>
+NO_INLINE constexpr auto make_func_eval(Func &&F, InputType const &a, InputType const &b) -> FuncEvalND<Func, 0> {
+    static_assert(MaxN_val > 0, "MaxN_val must be > 0");
+    static_assert(NumEvalPoints_val > 1, "Need at least 2 eval points");
+    static_assert(eps_val > std::numeric_limits<typename InputType::value_type>::epsilon(),
+                  "eps must be greater than machine epsilon for InputType");
+
+    std::vector<InputType> eval_pts = detail::linspace(a, b, static_cast<int>(NumEvalPoints_val));
+
+    for (int n = 2; n <= int(MaxN_val); ++n) {
+        auto evaluator = FuncEvalND<Func, 0>(std::forward<Func>(F), n, a, b);
+        double max_err = 0.0;
+        for (auto const &pt : eval_pts) {
+            auto actual = F(pt);
+            auto approx = evaluator(pt);
+            double rel_err = detail::relative_l2_norm(actual, approx);
+            max_err = std::max(max_err, rel_err);
+        }
+        if (max_err <= eps_val) {
+            std::cout << "Converged with N=" << n << " (max err=" << std::scientific << max_err << ")\n";
+            return evaluator;
+        }
+    }
+
+    std::cerr << "Warning: did not converge to eps_val=" << std::scientific << eps_val << " within N=" << MaxN_val
+              << "\n";
+    return FuncEvalND<Func, 0>(std::forward<Func>(F), static_cast<int>(MaxN_val), a, b);
+}
+#endif
 
 } // namespace poly_eval

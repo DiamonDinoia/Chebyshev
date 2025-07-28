@@ -18,6 +18,7 @@ template <typename T> using remove_cvref_t = std::remove_cv_t<std::remove_refere
 
 namespace poly_eval {
 
+template <class Func, std::size_t, std::size_t> class FuncEval;
 // -----------------------------------------------------------------------------
 // Buffer: Conditional type alias for std::vector or std::array
 // -----------------------------------------------------------------------------
@@ -32,23 +33,26 @@ using AlignedBuffer = std::conditional_t < N_compile_time_val == 0 &&
 // -----------------------------------------------------------------------------
 // function_traits: Helper to deduce input and output types from a callable
 // -----------------------------------------------------------------------------
-template <typename T> struct function_traits : function_traits<decltype(&T::operator())> {};
+template <typename T> struct function_traits : function_traits<decltype(&std::remove_cvref_t<T>::operator())> {};
 
 template <typename R, typename Arg> struct function_traits<R (*)(Arg)> {
     using result_type = R;
     using arg0_type = Arg;
 };
 
+// std::function<R(Arg)>
 template <typename R, typename Arg> struct function_traits<std::function<R(Arg)>> {
     using result_type = R;
     using arg0_type = Arg;
 };
 
+// pointer to const member (for lambdas with const operator())
 template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(Arg) const> {
     using result_type = R;
     using arg0_type = Arg;
 };
 
+// pointer to non‐const member (if you ever need it)
 template <typename F, typename R, typename Arg> struct function_traits<R (F::*)(Arg)> {
     using result_type = R;
     using arg0_type = Arg;
@@ -73,6 +77,19 @@ struct tuple_size_or_zero<T, std::void_t<decltype(std::tuple_size_v<std::remove_
 
 } // namespace poly_eval
 
+template <typename T> struct is_complex : std::false_type {};
+template <typename T> struct is_complex<std::complex<T>> : std::true_type {};
+template <typename T> inline constexpr bool is_complex_v = is_complex<std::remove_cv_t<T>>::value;
+
+// —— detect whether T has a std::tuple_size<T>::value member (e.g. std::array, tuple, etc.)
+template <typename, typename = void> struct has_tuple_size : std::false_type {};
+template <typename T> struct has_tuple_size<T, std::void_t<decltype(std::tuple_size<T>::value)>> : std::true_type {};
+template <typename T> inline constexpr bool has_tuple_size_v = has_tuple_size<std::remove_cv_t<T>>::value;
+
+template <typename T> struct is_func_eval : std::false_type {};
+
+template <typename... Args> struct is_func_eval<poly_eval::FuncEval<Args...>> : std::true_type {};
+
 namespace poly_eval::detail {
 
 template <typename T> constexpr ALWAYS_INLINE T fma(const T &a, const T &b, const T &c) noexcept {
@@ -84,7 +101,6 @@ template <typename T, typename U> constexpr ALWAYS_INLINE T fma(const T &a, cons
     // Fused multiply-add: a * b + c
     return T{fma(real(a), b, real(c)), fma(imag(a), b, imag(c))};
 }
-
 
 // std::countr_zero returns the number of trailing zero bits.
 // If an address is N-byte aligned, its N lowest bits must be zero.
@@ -137,7 +153,7 @@ template <std::size_t Start, std::size_t Stop, std::size_t Inc = 1, typename F> 
     unroll_loop_impl<Start, Inc>(std::forward<F>(f), std::make_index_sequence<Count>{});
 }
 
-template <std::size_t Stop,typename F> constexpr void unroll_loop(F &&f) {
+template <std::size_t Stop, typename F> constexpr void unroll_loop(F &&f) {
     return unroll_loop<0, Stop, 1>(std::forward<F>(f));
 }
 
@@ -313,4 +329,65 @@ constexpr auto make_static_extents(std::index_sequence<Is...>) {
     return stdex::extents<std::size_t, ((void)Is, N_compile)..., DimOut>{};
 }
 
+template <typename T> std::vector<T> linspace(const T start, const T end, const int num_points) {
+    std::vector<T> points(num_points);
+    if (num_points <= 1) {
+        if (num_points == 1)
+            points[0] = start;
+        return points;
+    }
+    T step = (end - start) / static_cast<T>(num_points - 1);
+    for (int i = 0; i < num_points; ++i) {
+        points[i] = start + static_cast<T>(i) * step;
+    }
+    return points;
+}
+
+template <typename T, std::size_t N>
+std::vector<std::array<T, N>> linspace(const std::array<T, N> &start, const std::array<T, N> &end, int num_points) {
+    std::vector<std::array<T, N>> points(num_points);
+    if (num_points <= 1) {
+        if (num_points == 1)
+            points[0] = start;
+        return points;
+    }
+    std::array<T, N> step;
+    for (std::size_t i = 0; i < N; ++i)
+        step[i] = (end[i] - start[i]) / static_cast<T>(num_points - 1);
+
+    for (int k = 0; k < num_points; ++k) {
+        for (std::size_t i = 0; i < N; ++i)
+            points[k][i] = start[i] + static_cast<T>(k) * step[i];
+    }
+    return points;
+}
+
+template <typename T> double relative_error(const T &approx, const T &actual) {
+    if constexpr (std::is_class_v<T>) {
+        double err = 0.0;
+        for (std::size_t i = 0; i < std::tuple_size_v<T>; ++i) {
+            double rel = 1.0 - double(approx[i]) / double(actual[i]);
+            err += rel * rel;
+        }
+        return std::sqrt(err / double(std::tuple_size_v<T>));
+    } else {
+        return std::abs(1.0 - double(approx) / double(actual));
+    }
+}
+
+template <typename T> double relative_l2_norm(const T &approx, const T &actual) {
+    double num = 0.0, denom = 0.0;
+    if constexpr (std::is_class_v<T>) {
+        for (std::size_t i = 0; i < std::tuple_size_v<T>; ++i) {
+            double diff = double(approx[i]) - double(actual[i]);
+            num += diff * diff;
+            denom += double(actual[i]) * double(actual[i]);
+        }
+    } else {
+        double diff = double(approx) - double(actual);
+        num = diff * diff;
+        denom = double(actual) * double(actual);
+    }
+    return denom == 0.0 ? 0.0 : std::sqrt(num) / std::sqrt(denom);
+}
 } // namespace poly_eval::detail

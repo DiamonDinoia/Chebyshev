@@ -230,9 +230,6 @@ template <typename... EvalTypes> class FuncEvalMany {
     }
 };
 
-/*==========================================================================*
- *                  Generic N‑dimensional function approximator             *
- *==========================================================================*/
 template <class Func, std::size_t N_compile = 0> class FuncEvalND {
   public:
     using Input0 = typename function_traits<Func>::arg0_type;
@@ -247,179 +244,47 @@ template <class Func, std::size_t N_compile = 0> class FuncEvalND {
     using extents_t = std::conditional_t<
         is_static, decltype(detail::make_static_extents<N_compile, dim_, outDim_>(std::make_index_sequence<dim_>{})),
         stdex::dextents<std::size_t, dim_ + 1>>;
-
     using mdspan_t = stdex::mdspan<Scalar, extents_t, stdex::layout_right>;
 
-    /*---------------- Constructors ----------------*/
+    //--- Constructors ---
     template <std::size_t C = N_compile, typename = std::enable_if_t<(C != 0)>>
-    constexpr FuncEvalND(Func f, const InputType &a, const InputType &b)
-        : func_{f}, degree_{static_cast<int>(C)}, coeffs_flat_(), coeffs_md_{coeffs_flat_.data(), extents_t{}} {
-        compute_scaling(a, b);
-        initialize(static_cast<int>(C));
-    }
+    constexpr FuncEvalND(Func f, const InputType &a, const InputType &b);
 
     template <std::size_t C = N_compile, typename = std::enable_if_t<(C == 0)>>
-    constexpr FuncEvalND(Func f, int n, const InputType &a, const InputType &b)
-        : func_{f}, degree_{n}, coeffs_flat_(storage_required(n)), coeffs_md_{coeffs_flat_.data(), make_ext(n)} {
-        compute_scaling(a, b);
-        initialize(n);
-    }
+    constexpr FuncEvalND(Func f, int n, const InputType &a, const InputType &b);
 
-    /*---------------- Evaluation operator ----------------*/
-    OutputType operator()(const InputType &x) const {
-        return poly_eval::horner<N_compile, OutputType>(map_from_domain(x), coeffs_md_, degree_);
-    }
+    //--- Evaluation ---
+    OutputType operator()(const InputType &x) const;
 
   private:
-    /*-------------------- Data members -------------------*/
     static constexpr std::size_t coeff_count = detail::storage_required<Scalar, N_compile, dim_, outDim_>();
-
-    // now you can do exactly what you wanted:
 
     Func func_;
     const int degree_;
     InputType low_{}, hi_{};
     alignas(xsimd::best_arch::alignment())
-        AlignedBuffer<Scalar, coeff_count, xsimd::best_arch::alignment()> coeffs_flat_; // owns the storage
-    mdspan_t coeffs_md_;                                                                // view over the storage
+        AlignedBuffer<Scalar, coeff_count, xsimd::best_arch::alignment()> coeffs_flat_;
+    mdspan_t coeffs_md_;
 
+    // indexing helpers
     template <typename IdxArray, std::size_t... I>
-    Scalar &coeff_impl(const IdxArray &idx, std::size_t k, std::index_sequence<I...>) noexcept {
-        return coeffs_md_(static_cast<std::size_t>(idx[I])..., k);
-    }
+    Scalar &coeff_impl(const IdxArray &idx, std::size_t k, std::index_sequence<I...>) noexcept;
 
-    template <class IdxArray> [[nodiscard]] Scalar &coeff(const IdxArray &idx, std::size_t k) noexcept {
-        return coeff_impl<IdxArray>(idx, k, std::make_index_sequence<dim_>{});
-    }
+    template <class IdxArray> [[nodiscard]] Scalar &coeff(const IdxArray &idx, std::size_t k) noexcept;
 
-    /*-------------------- Extent helpers -----------------*/
-    static extents_t make_ext(int n) noexcept {
-        if constexpr (is_static) {
-            return detail::make_static_extents<N_compile, dim_, outDim_>(std::make_index_sequence<dim_>{});
-        } else {
-            return make_ext(n, std::make_index_sequence<dim_ + 1>{});
-        }
-    }
-    template <std::size_t... Is> static extents_t make_ext(int n, std::index_sequence<Is...>) noexcept {
-        return extents_t{(Is < dim_ ? static_cast<std::size_t>(n) : static_cast<std::size_t>(outDim_))...};
-    }
+    // extent helpers
+    static extents_t make_ext(int n) noexcept;
+    template <std::size_t... Is> static extents_t make_ext(int n, std::index_sequence<Is...>) noexcept;
+    static constexpr std::size_t storage_required(const int n) noexcept;
 
-    static constexpr std::size_t storage_required(const int n) noexcept {
-        auto ext = make_ext(n);
-        auto mapping = typename mdspan_t::mapping_type{ext};
-        return mapping.required_span_size();
-    }
+    // initialization and mapping
+    constexpr void initialize(int n);
+    [[nodiscard]] constexpr InputType map_to_domain(const InputType &t) const noexcept;
+    [[nodiscard]] constexpr InputType map_from_domain(const InputType &x) const noexcept;
+    constexpr void compute_scaling(const InputType &a, const InputType &b) noexcept;
 
-    /*-------------------- Initialisation -----------------*/
-    constexpr void initialize(int n) {
-        Buffer<Scalar, N_compile> nodes{};
-        if constexpr (!N_compile)
-            nodes.resize(n);
-        for (int k = 0; k < n; ++k)
-            nodes[k] = detail::cos((2.0 * double(k) + 1.0) * M_PI / (2.0 * n));
-
-        std::array<int, dim_> ext_idx{};
-        ext_idx.fill(n);
-
-        /*---- sample f on the Chebyshev grid ----*/
-        for_each_index<dim_>(ext_idx, [&](const std::array<int, dim_> &idx) {
-            InputType x_dom{};
-            for (std::size_t d = 0; d < dim_; ++d)
-                x_dom[d] = nodes[idx[d]];
-            OutputType y = func_(map_to_domain(x_dom));
-            for (std::size_t k = 0; k < outDim_; ++k)
-                coeff(idx, k) = y[k];
-        });
-
-        /*---- convert along each axis: Newton → monomial ----*/
-        Buffer<Scalar, N_compile> rhs{}, alpha{}, mono{};
-        if constexpr (!N_compile) {
-            rhs.resize(n);
-            alpha.resize(n);
-            mono.resize(n);
-        }
-
-        std::array<int, dim_> base_idx{};
-        for (std::size_t axis = 0; axis < dim_; ++axis) {
-            auto inner_ext = ext_idx;
-            inner_ext[axis] = 1;
-            for_each_index<dim_>(inner_ext, [&](const std::array<int, dim_> &base) {
-                for (std::size_t k = 0; k < outDim_; ++k) {
-                    for (int i = 0; i < n; ++i) {
-                        base_idx = base;
-                        base_idx[axis] = i;
-                        rhs[i] = coeff(base_idx, k);
-                    }
-                    alpha = detail::bjorck_pereyra<N_compile, Scalar, Scalar>(nodes, rhs);
-                    mono = detail::newton_to_monomial<N_compile, Scalar, Scalar>(alpha, nodes);
-                    for (int i = 0; i < n; ++i) {
-                        base_idx = base;
-                        base_idx[axis] = i;
-                        coeff(base_idx, k) = mono[i];
-                    }
-                }
-            });
-        }
-
-        /*---- reverse coefficient order in each axis ----*/
-        for (std::size_t axis = 0; axis < dim_; ++axis) {
-            auto inner_ext = ext_idx;
-            inner_ext[axis] = 1;
-            for_each_index<dim_>(inner_ext, [&](const std::array<int, dim_> &base) {
-                for (std::size_t k = 0; k < outDim_; ++k) {
-                    int i = 0, j = n - 1;
-                    while (i < j) {
-                        base_idx = base;
-                        base_idx[axis] = i;
-                        auto &a = coeff(base_idx, k);
-                        base_idx[axis] = j;
-                        auto &b = coeff(base_idx, k);
-                        std::swap(a, b);
-                        ++i;
-                        --j;
-                    }
-                }
-            });
-        }
-    }
-
-    [[nodiscard]] constexpr InputType map_to_domain(const InputType &t) const noexcept {
-        // t ∈ [‑1,1] → x ∈ [a,b]
-        InputType out{};
-        for (std::size_t d = 0; d < dim_; ++d)
-            out[d] = Scalar(0.5) * (t[d] / low_[d] + hi_[d]);
-        return out;
-    }
-
-    [[nodiscard]] constexpr InputType map_from_domain(const InputType &x) const noexcept {
-        // x ∈ [a,b] → t ∈ [‑1,1]
-        InputType out{};
-        for (std::size_t d = 0; d < dim_; ++d)
-            out[d] = (Scalar(2) * x[d] - hi_[d]) * low_[d];
-        return out;
-    }
-
-    constexpr void compute_scaling(const InputType &a, const InputType &b) noexcept {
-        for (std::size_t d = 0; d < dim_; ++d) {
-            low_[d] = Scalar(1) / (b[d] - a[d]);
-            hi_[d] = b[d] + a[d];
-        }
-    }
-
-    /*--------------------- Utilities ---------------------*/
-    template <std::size_t Rank, class F> static void for_each_index(const std::array<int, Rank> &ext, F &&body) {
-        std::array<int, Rank> idx{};
-        while (true) {
-            body(idx);
-            for (std::size_t d = 0; d < Rank; ++d) {
-                if (++idx[d] < ext[d])
-                    break;
-                if (d == Rank - 1)
-                    return;
-                idx[d] = 0;
-            }
-        }
-    }
+    // utility for multidimensional loops
+    template <std::size_t Rank, class F> static void for_each_index(const std::array<int, Rank> &ext, F &&body);
 };
 
 // 1) Compile-time degree only
@@ -440,14 +305,15 @@ C20CONSTEXPR auto make_func_eval(Func F, double eps, typename function_traits<Fu
                                  typename function_traits<Func>::arg0_type b);
 
 #if __cplusplus >= 202002L
-// 4) C++20: compile-time error tolerance
 template <double eps_val, std::size_t MaxN_val = 32, std::size_t NumEvalPoints_val = 100,
-          std::size_t Iters_compile_time = 1, class Func>
-constexpr auto make_func_eval(Func F, typename function_traits<Func>::arg0_type a,
-                              typename function_traits<Func>::arg0_type b);
+          std::size_t Iters_compile_time = 1, class Func,
+          typename InputType = typename function_traits<Func>::arg0_type,
+          typename = std::enable_if_t<std::tuple_size_v<InputType> == 1>>
+constexpr auto make_func_eval(Func F, InputType a, InputType b);
 #endif
 
-template <typename... EvalTypes> C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept;
+template <typename... EvalTypes, typename = std::enable_if_t<(is_func_eval<std::decay_t<EvalTypes>>::value && ...)>>
+C20CONSTEXPR FuncEvalMany<EvalTypes...> make_func_eval(EvalTypes... evals) noexcept;
 
 } // namespace poly_eval
 

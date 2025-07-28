@@ -130,7 +130,7 @@ if (Eigen_ADDED)
 endif ()
 
 add_executable(funcND funcND.cpp)
-target_compile_features(funcND PRIVATE cxx_std_17)
+target_compile_features(funcND PRIVATE cxx_std_20)
 target_compile_options(funcND PRIVATE -march=native -ftree-vectorize)
 target_link_libraries(funcND PRIVATE cheb Eigen)
 
